@@ -3,16 +3,54 @@ Set of tools for doing Isomap
 
 """
 import time
-from numpy import array,zeros,amax
+from numpy import array,zeros,amax,sqrt,dot
 import numpy
 from numpy.linalg import eig
 import pycuda.autoinit
 import pycuda.driver as drv
 from pycuda.compiler import SourceModule
+import math
 
 from DataUtils import dataConfig,loadTable,loadSplitTable,loadMatrix,saveTable
 
+
 # KNN Algorithm --------------------------------------------
+
+def simpleKNN(dataTable, k, eps = 1000000000):
+    """
+    A simple CPU implementation to check KNN against
+    """
+    data = loadMatrix(dataTable)
+    
+    allindices = []
+    alldists = []
+    for d in data:
+        distances = [sqrt(dot(d-t,d-t)) for t in data]
+        
+        p = zip(distances,range(len(distances)))
+        p.sort()
+        p = p[1:k+1]
+        dists,inds = zip(*p)
+        dists = list(dists)
+        inds = list(inds)
+        
+        alldists.append(dists)
+        allindices.append(inds)
+    for i in xrange(len(alldists)):
+            j = 0
+            for ind in allindices[i]: #add mirrored entries
+                if not (i in allindices[ind]):
+                    allindices[ind].append(i)
+                    alldists[ind].append(alldists[i][j])
+                j += 1
+    
+    maxKValues = max([len(p) for p in allindices]) 
+    #print maxKValues
+    for i in xrange(len(alldists)): #pad all entries to the same length for the next algorithm
+        if len(alldists[i]) < maxKValues:
+            alldists[i].extend( [eps]*(maxKValues-len(alldists[i])) )
+            allindices[i].extend( [0]*(maxKValues-len(allindices[i])) )
+    return [allindices[i]+alldists[i] for i in xrange(len(alldists))]
 
 def KNNConfig(dataTable, k, eps = 1000000000.,gpuMemSize = 512, settings = {}):
     """
@@ -73,7 +111,6 @@ def KNNKernel(targetChunkSize,options,prefix = ''):
                 "        }\n"+
                 "    }\n" +
                 "}\n")
-    print program
     return program
 
 def KNN(dataTable,knnOptions):
@@ -123,6 +160,7 @@ def KNN(dataTable,knnOptions):
             ind = alldists[i].index(knnOptions['eps'])
             alldists[i] = alldists[i][:ind]
             allindices[i] = allindices[i][:ind]
+    for i in xrange(len(alldists)):
             j = 0
             for ind in allindices[i]: #add mirrored entries
                 if not (i in allindices[ind]):
@@ -131,11 +169,11 @@ def KNN(dataTable,knnOptions):
                 j += 1
     
     maxKValues = max([len(p) for p in allindices]) 
-    
+    #print maxKValues
     for i in xrange(len(alldists)): #pad all entries to the same length for the next algorithm
         if len(alldists[i]) < maxKValues:
             alldists[i].extend( [knnOptions['eps']]*(maxKValues-len(alldists[i])) )
-            allindices[i].extend( [0]*(maxKValues-len(alldists[i])) )
+            allindices[i].extend( [0]*(maxKValues-len(allindices[i])) )
     
     print time.time()-t0, " seconds to process KNN"
     """
@@ -186,7 +224,11 @@ def APSPConfig(dataTable, eps=100000000., gpuMemSize = 512, settings = {}):
     else:
         settings["totalChunks"] = settings["dataLength"]/settings["chunkSize"]
     
-    settings["block"] = (max(settings["dataLength"]/512,1),max(settings["dataLength"]/512/512,1),max(settings["dataLength"]/512/512/64,1))
+    settings["block"] = (min(max(settings["dataLength"],1),512),1,1) #XXX: fix this for using the device data on max threads
+    g1 = int(math.ceil(settings["dataLength"]/512.))
+    g2 = int(math.ceil(g1/512.))
+    g3 = int(math.ceil(g2/64.))
+    settings["grid"] = (max(g1,1),max(g2,1),max(g3,1))
     return settings
     
 
@@ -195,32 +237,34 @@ def APSPKernel(targetChunkSize,options,prefix = ''):
     Return the string representation of the desired tiled KNN kernel.
     We do this twice for different target chunk sizes so we can handle odd length data.
     """
+    #choose a multiple of 2 for unrolling
+    unroll = 1
+    
     
     #implemented from paper
     progstr = ("__global__ void SSSP(const unsigned int* Edges, const float* Weights, const float* Costs, float* Paths) {\n"+
-               "    const unsigned int v = threadIdx.x+threadIdx.y*512+threadIdx.z*512*64;\n" +
-               "    //for (unsigned int j = 0; j < "+str(targetChunkSize)+"; j++) {\n" +
+               "    const unsigned int v = threadIdx.x+blockIdx.x*512+blockIdx.y*512*512;\n" +
                "    if (v < "+str(options['dataLength'])+") {\n" +
-               "        const unsigned int vertex = v; //+j*"+str(options['dataLength'])+";\n" +
+               "        const unsigned int vertex = v;\n" +
                "        float p = Costs[vertex];\n" +
-               "        for (unsigned int i = 0; i < "+str(options['k']-(options['k']%2))+"; i += 2) {\n" +
-               "            const unsigned int nid = vertex*"+str(options['k'])+"+i;\n" +
-               "            p = min(p,min(Costs[Edges[nid]]+Weights[nid],Costs[Edges[nid+1]]+Weights[nid+1]));\n" +
-               "        }\n")
-               
-    if options['k']%2: #minor parallel speedup by checking 2 at once
-        progstr +=("        p = min(p,Costs[Edges[vertex*"+str(options['k'])+"+"+str(options['k']-1)+"]]+Weights[vertex*"+str(options['k'])+"+"+str(options['k']-1)+"]);\n")
-    
-    progstr +=("        Paths[vertex] = p;\n" +
+               "        unsigned int i = 0;\n" +
+               "        while (Weights[vertex*"+str(options['k'])+"+i] < "+str(options['eps'])+" and i < "+str(options['k'])+") {\n" +
+               "            const unsigned int neighbourid = vertex*"+str(options['k'])+"+i;\n" +
+               "            const double d = (Costs[Edges[neighbourid]]+Weights[neighbourid]);\n" +
+               "            p = min(p,d);\n" +
+               "            i++;\n" +
+               "        }\n"+
+               "        Paths[vertex] = p;\n" +
                "    }\n" +
-               "    //}\n" +
                "}\n")
-    print progstr
+    #print progstr
     return progstr
 
 
 def APSP(dataTable,apspOptions):
     knn_refs,knn_dists = loadSplitTable(dataTable,apspOptions)
+    knn_refs = knn_refs.astype(numpy.uint32)
+    knn_dists = knn_dists.astype(numpy.float32)
     
     #neighbours = numpy.int32(self.number_of_neighbours)
     
@@ -234,11 +278,12 @@ def APSP(dataTable,apspOptions):
     t0 = time.time()
     
     #iterate through every row of the path cost matrix
-    last = 130
+    last = 70
     for v in xrange(0,apspOptions['dataLength'],apspOptions['chunkSize']):
         
         #create a new row for the cost matrix
-        Costs = Costs0.copy()
+        Costs = Costs0.copy().astype(numpy.float32)
+        
         Costs[v] = 0.
         for n in xrange(v):
             Costs[n] = Matrix[n][v]
@@ -246,31 +291,44 @@ def APSP(dataTable,apspOptions):
         
         #initialise the costs we have for the immediate neighbours
         for n in xrange(apspOptions['k']):
-            print v2+n,knn_refs[v2+n]
-            Costs[knn_refs[v2+n]] = knn_dists[v2+n]
+            if knn_dists[v2+n] < apspOptions['eps']:
+                #print v2+n,knn_dists[v2+n]
+                Costs[knn_refs[v2+n]] = knn_dists[v2+n]
+        
+        Costs2 = Costs.copy().astype(numpy.float32)
         
         #iteratively expand the shortest paths (1 iter per kernel run) until we have all the paths
-        for i in xrange(last-5):
-            kernel(drv.In(knn_refs),drv.In(knn_dists),drv.In(Costs),drv.InOut(Costs),block=apspOptions['block'])
-        l = last-5
+        for i in xrange(last-3):
+            kernel(drv.In(knn_refs),drv.In(knn_dists),drv.In(Costs),drv.Out(Costs2),grid=apspOptions['grid'],block=apspOptions['block'])
+            kernel(drv.In(knn_refs),drv.In(knn_dists),drv.In(Costs2),drv.Out(Costs),grid=apspOptions['grid'],block=apspOptions['block'])
+        l = last-3
+        
         
         #XXX: this is expensive, find a better way
         while amax(Costs) > 100000.:
-            kernel(drv.In(knn_refs),drv.In(knn_dists),drv.In(Costs),drv.InOut(Costs),block=apspOptions['block'])
-            kernel(drv.In(knn_refs),drv.In(knn_dists),drv.In(Costs),drv.InOut(Costs),block=apspOptions['block'])
-            l += 2
+            kernel(drv.In(knn_refs),drv.In(knn_dists),drv.In(Costs),drv.Out(Costs2),grid=apspOptions['grid'],block=apspOptions['block'])
+            kernel(drv.In(knn_refs),drv.In(knn_dists),drv.In(Costs2),drv.Out(Costs),grid=apspOptions['grid'],block=apspOptions['block'])
+            l += 1
+            #print Costs
+            
         last = l
         
+        
         #do a few extra iterations in case we missed the shortest paths
-        for i in xrange(40):
-            kernel(drv.In(knn_refs),drv.In(knn_dists),drv.In(Costs),drv.InOut(Costs),block=apspOptions['block'])
+        for i in xrange(10):
+            kernel(drv.In(knn_refs),drv.In(knn_dists),drv.In(Costs),drv.Out(Costs2),block=apspOptions['block'])
+            kernel(drv.In(knn_refs),drv.In(knn_dists),drv.In(Costs2),drv.Out(Costs),block=apspOptions['block'])
+        
+        #print Costs
         
         #copy our paths to the diagonally reflected side of the matrix, to guarantee symmetry
         for n in xrange(v):
             Matrix[n][v] = Costs[n]
         
+        
         #add the row to the matrix
         Matrix.append(Costs)
+        
     print time.time()-t0, " seconds to create shortest paths."
     
     """
@@ -295,7 +353,7 @@ def NormMatrixConfig(dataTable, gpuMemSize = 512, settings = {}):
     
     settings["memSize"] = gpuMemSize*1024*1024
     settings["k"] = settings["sourceDims"]
-    settings["eps"] = eps
+    #settings["eps"] = eps
     
     #calculate memory constraints for the matrix chunks
     sumMem = 6*settings["dataLength"]
@@ -312,7 +370,11 @@ def NormMatrixConfig(dataTable, gpuMemSize = 512, settings = {}):
     else:
         settings["totalChunks"] = settings["dataLength"]/settings["chunkSize"]
     
-    settings["block"] = (max(settings["dataLength"]/512,1),max(settings["dataLength"]/512/512,1),max(settings["dataLength"]/512/512/64,1))
+    settings["block"] = (min(max(settings["dataLength"],1),512),1,1) #XXX: fix this for using the device data on max threads
+    g1 = int(math.ceil(settings["dataLength"]/512.))
+    g2 = int(math.ceil(g1/512.))
+    g3 = int(math.ceil(g2/64.))
+    settings["grid"] = (max(g1,1),max(g2,1),max(g3,1))
     return settings
 
 def NormMatrix(dataTable,nmOptions):
@@ -320,8 +382,12 @@ def NormMatrix(dataTable,nmOptions):
         
         normedMatrix = loadMatrix(dataTable)
         
+        normedMatrix = normedMatrix*normedMatrix
+        normsums = array([sum(r) for r in normedMatrix])/nmOptions['dataLength']
+        
+        """
         progstr = ("__global__ void SumSquare(const unsigned int totalNodes, float* Sums, float* Paths) {\n"+
-                   "    const unsigned int v = threadIdx.x+threadIdx.y*512+threadIdx.z*64;\n" +
+                   "    const unsigned int v = threadIdx.x+blockIdx.x*512+blockIdx.y*512*512;\n" +
                    "    if (v < "+str(nmOptions['dataLength'])+") {\n" +
                    "        double sum = 0.0;\n" +
                    "        for (unsigned int j = 0; j < "+str(nmOptions['chunkSize'])+"; j++) {\n" +
@@ -336,8 +402,9 @@ def NormMatrix(dataTable,nmOptions):
         normsums = zeros(nmOptions['dataLength']).astype(numpy.float32)
         for i in xrange(nmOptions['totalChunks']):
             normsample = normedMatrix[i*nmOptions['chunkSize']:(i+1)*nmOptions['chunkSize']].flatten()
-            prg(drv.In(numpy.uint32(nmOptions['dataLength'])),drv.InOut(normsums),drv.InOut(normsample),block=nmOptions['block'])
+            prg(drv.In(numpy.uint32(nmOptions['dataLength'])),drv.InOut(normsums),drv.InOut(normsample),grid=nmOptions['grid'],block=nmOptions['block'])
             normedMatrix[i*nmOptions['chunkSize']:(i+1)*nmOptions['chunkSize']] = normsample.reshape((nmOptions['chunkSize'],nmOptions['dataLength']))
+        """
         
         allsums = sum(normsums)/nmOptions['dataLength']
         for i in xrange(len(normedMatrix)):
@@ -360,9 +427,10 @@ def NormMatrix(dataTable,nmOptions):
 def EigenEmbedding(dataTable, finalDims = 3):
     t0 = time.time()
         
-    e = eigh(loadMatrix(dataTable))
-    e = [(e[1].T[i]*sqrt(abs(e[0][i]))).toList() for i in xrange(finalDims)]
-    e.reverse()
+    e = eig(loadMatrix(dataTable))
+    e = [(e[1].T[i]*sqrt(abs(e[0][i]))).tolist() for i in xrange(len(e[0]))]
+    #e.reverse()
+    e = [list(l) for l in zip(*e[:finalDims])]
     
     print time.time()-t0, " seconds to compute eigenvalue embedding."
     

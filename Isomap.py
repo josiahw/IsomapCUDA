@@ -13,14 +13,18 @@ def Isomap(dataSet,srcDims,trgDims,k,eps=1000000000.):
     kconfig = KNNConfig(dataSet,k,eps,GPU_MEM_SIZE)
     kconfig['sourceDims'] = min(srcDims,kconfig['sourceDims'])
     knnList = KNN(dataSet,kconfig)
+    #knnList = simpleKNN(dataSet,k,eps)
+    
+    #saveTable(knnList,'knn.csv')
     
     #then do APSP
-    aconfig = APSPConfig(dataSet,eps,GPU_MEM_SIZE)
+    aconfig = APSPConfig(knnList,eps,GPU_MEM_SIZE)
     pathMatrix = APSP(knnList,aconfig)
     del knnList
     
     #then normalize the matrix
-    normMatrix = NormMatrix(pathMatrix,GPU_MEM_SIZE)
+    nconfig = NormMatrixConfig(pathMatrix,GPU_MEM_SIZE)
+    normMatrix = NormMatrix(pathMatrix,nconfig)
     del pathMatrix
     
     #then get eigenvalues
@@ -40,7 +44,7 @@ if __name__ == '__main__':
     
     trgDims = 3
     srcDims = 10000000000
-    k = 8
+    k =5
     eps = 1000000000.
     infile='swissroll.csv'
     outfile='embedding.csv'
