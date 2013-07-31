@@ -40,10 +40,11 @@ def loadTable(dataTable,options):
             for v in l[:options["chunkSize"]]:
                 chunk.append(array([float(p) for p in v.strip('\r\n ').split(',')[:options["sourceDims"]]]).flatten()) #chopping by sourceDims lets us ignore extra columns if we want
             l = l[options["chunkSize"]:]
-            results.append(array(chunk))
+            results.append(array(chunk).flatten().astype(numpy.float32))
+        chunk = []
         for v in l:
             chunk.append(array([float(p) for p in v.strip('\r\n ').split(',')[:options["sourceDims"]]]).flatten())
-        results.append(array(chunk).astype(numpy.float32))
+        results.append(array(chunk).flatten().astype(numpy.float32))
     else:
         dt = array(dataTable).astype(numpy.float32)
         for i in xrange(len(dt)/options["chunkSize"]):
