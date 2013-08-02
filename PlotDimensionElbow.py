@@ -12,65 +12,42 @@
 ####################################################################################################################################################
 
 """
-A simple plotting script for checking the swiss roll output data.
+A plotting script for generating the dimensional reconstruction error elbow.
 """
 
-import numpy as np
-from mpl_toolkits.mplot3d import Axes3D
-import matplotlib.pyplot as plt
-import matplotlib
+arg_values = ['mindims=','maxdims=','if=','of=','help','h']
+optlist, args = getopt.getopt(sys.argv[1:], 'x', arg_values)
 
-def randrange(n, vmin, vmax):
-    return (vmax-vmin)*np.random.rand(n) + vmin
-
-fig = plt.figure()
-#ax = fig.add_subplot(111) #, projection='3d')
-ax = fig.add_subplot(111, projection='3d')
-n = 100
-
-f = open('embedding.csv')
-
-f = f.readlines()
-x = []
-y = []
-z = []
-col = []
-print len(f)
-for l in f:
-    d = l.strip('\r\n').split(',')
-    x.append(float(d[0]))
-    y.append(float(d[1]))
-    z.append(float(d[2]))
-    #col.append(float(d[3]))
-"""
-for d in f[0].strip('\r\n').split(','):
-    x.append(float(d))
-for d in f[1].strip('\r\n').split(','):
-    y.append(float(d))
-for d in f[2].strip('\r\n').split(','):
-    z.append(float(d))
-"""
-xs = np.array(x) #/2000.0
-ys = np.array(y) #/2000.0
-zs = np.array(z) #/2000.0
+minDims = 3
+maxDims = 12
+infile='embedding.csv'
+outfile='embedding.ps'
+saveFile=False
 
 
-f = [(float(l.strip(' \r\n').split(',')[0])**2+float(l.strip(' \r\n').split(',')[1])**2)**0.5 for l in open('swissroll.csv').readlines()]
-#f = range(len(x))
-d = (max(f)-min(f))*1.0
-#print f
-
-
-f = [[0,1.-(i-min(f))/(d),(i-min(f))/(d)] for i in f]
-
-cs = np.array(f) #np.array([0.]*333+[0.25]*235+[0.5]*281+[0.75]*209) #range(len(x))) #np.array(col)
-print len(cs),len(zs)
-#ax.scatter(xs, ys,c=cs,s=20,cmap=matplotlib.cm.hot)
-
-ax.scatter(xs, ys, zs, c=cs,s=20,cmap=matplotlib.cm.hot)
-
-ax.set_xlabel('X')
-ax.set_ylabel('Y')
-ax.set_zlabel('Z')
-
-plt.show()
+for o in optlist:
+    if o[0].strip('-') == 'mindims':
+        trgDims = int(o[1])
+for o in optlist:
+    if o[0].strip('-') == 'maxdims':
+        srcDims = int(o[1])
+for o in optlist:
+    if o[0].strip('-') == 'if':
+        infile = o[1]
+for o in optlist:
+    if o[0].strip('-') == 'of':
+        outfile = o[1]
+        saveFile = True
+for o in optlist:
+    nonmetric = True
+    
+for o in optlist:
+    if o[0].strip('-') == 'help' or o[1].strip('-') == 'h':
+        print "The following commands are available:"
+        print "\t--if=inputfile\tDefaults to embedding.csv"
+        print "\t--of=outputfile\tDefaults to embedding.ps"
+        print "\t--k=k_nearest_neighbours\tDefaults to 12"
+        print "\t--outdims=embedding_dimensions\tDefaults to 3"
+        print "\t--indims=input_dimensions\tDefaults to all in the input file"
+        print "\t--nonmetric\tEnables non-metric MDS embeddings"
+result = None

@@ -1,7 +1,18 @@
+####################################################################################################################################################
+#Copyright (c) 2013, Josiah Walker
+#All rights reserved.
+#
+#Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+#
+#    Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+#    Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or #other materials provided with the distribution.
+#
+#THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED #WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY #DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS #OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING #NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+####################################################################################################################################################
 """
-Set of tools for doing Isomap
+Set of (mostly) GPU based algorithms for doing Isomap and Isomap variants
+"""
 
-"""
 import time
 from numpy import array,zeros,amax,sqrt,dot
 import numpy
@@ -315,7 +326,7 @@ def APSP(dataTable,apspOptions):
         
         
         #do a few extra iterations in case we missed the shortest paths
-        for i in xrange(10):
+        for i in xrange(15):
             kernel(drv.In(knn_refs),drv.In(knn_dists),drv.In(Costs),drv.Out(Costs2),block=apspOptions['block'])
             kernel(drv.In(knn_refs),drv.In(knn_dists),drv.In(Costs2),drv.Out(Costs),block=apspOptions['block'])
         
@@ -428,11 +439,17 @@ def EigenEmbedding(dataTable, finalDims = 3):
     t0 = time.time()
         
     e = eig(loadMatrix(dataTable))
-    e = [(e[1].T[i]*sqrt(abs(e[0][i]))).tolist() for i in xrange(len(e[0]))]
+    e = [(e[1].real.T[i]*sqrt(abs(e[0].real[i]))).tolist() for i in xrange(len(e[0]))]
     #e.reverse()
     e = [list(l) for l in zip(*e[:finalDims])]
     
     print time.time()-t0, " seconds to compute eigenvalue embedding."
     
     return e
+
+#Non-metric MDS algorithm -------------------------------------------------------
+
+def NonMetricMDSConfig(dataTable, gpuMemSize = 512, settings = {}):
+    pass
+
     
