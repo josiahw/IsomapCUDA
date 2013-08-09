@@ -1,0 +1,25 @@
+//GPU implementation distance calculations for the rank matrix
+//requires the following defines: 
+//CHUNK_SIZE
+//TOTAL_THREADS
+//STEP_SIZE (ie ceil(CHUNK_SIZE/TOTAL_THREADS))
+//DATA_DIMS
+//memory complexity = 3*4*CHUNK_SIZE + 6*4*TOTAL_THREADS + DATA_DIMS*DATA_SIZE + 8
+
+__global__ void RankDist(const unsigned int* Rank, const float* Coords, float* distChunk, float* threadSums) {
+    float sum = 0.0;
+    const unsigned int offset = threadIdx.x*STEP_SIZE;
+    const unsigned int limit = min(STEP_SIZE,CHUNK_SIZE-offset);
+    for (unsigned int i = 0; i < limit; ++i) {
+        //calculate distance
+        unsigned int pos = (i+offset)*2;
+        float d = 0.0;
+        for (unsigned int j = 0; j < DATA_DIMS; ++j) {
+            d += (Coords[Rank[pos]*DATA_DIMS+j]-Coords[Rank[pos+1]*DATA_DIMS+j])*
+                 (Coords[Rank[pos]*DATA_DIMS+j]-Coords[Rank[pos+1]*DATA_DIMS+j]);
+        }
+        sum += distChunk[i+offset] = sqrt(d);
+    }
+    //have a separate sum vector so we can normalize easily
+    threadSums[threadIdx.x] = sum;
+}

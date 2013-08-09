@@ -19,6 +19,7 @@ import numpy as np
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
 import matplotlib
+import sys
 
 def randrange(n, vmin, vmax):
     return (vmax-vmin)*np.random.rand(n) + vmin
@@ -27,9 +28,12 @@ fig = plt.figure()
 #ax = fig.add_subplot(111) #, projection='3d')
 ax = fig.add_subplot(111, projection='3d')
 n = 100
+fname = 'embedding.csv'
 
-f = open('embedding.csv')
-
+if len(sys.argv) > 1:
+    fname = sys.argv1
+print fname
+f = open(fname)
 f = f.readlines()
 x = []
 y = []
@@ -42,6 +46,18 @@ for l in f:
     y.append(float(d[1]))
     z.append(float(d[2]))
     #col.append(float(d[3]))
+    
+xmin = min(x)
+xmax = max(x)
+x = [(p-xmin)/(xmax-xmin) for p in x]
+ymin = min(y)
+ymax = max(y)
+y = [(p-ymin)/(ymax-ymin) for p in y]
+zmin = min(z)
+zmax = max(z)
+z = [(p-zmin)/(zmax-zmin) for p in z]
+
+    
 """
 for d in f[0].strip('\r\n').split(','):
     x.append(float(d))
@@ -61,16 +77,21 @@ d = (max(f)-min(f))*1.0
 #print f
 
 
-f = [[0,1.-(i-min(f))/(d),(i-min(f))/(d)] for i in f]
+f# = [[0,1.-(i-min(f))/(d),(i-min(f))/(d)] for i in f]
+
+f = [1.-(i-min(f))/(d)for i in f]
 
 cs = np.array(f) #np.array([0.]*333+[0.25]*235+[0.5]*281+[0.75]*209) #range(len(x))) #np.array(col)
 print len(cs),len(zs)
 #ax.scatter(xs, ys,c=cs,s=20,cmap=matplotlib.cm.hot)
 
 ax.scatter(xs, ys, zs, c=cs,s=20,cmap=matplotlib.cm.hot)
-
+ax.view_init(70,-130)
 ax.set_xlabel('X')
 ax.set_ylabel('Y')
 ax.set_zlabel('Z')
 
-plt.show()
+if len(sys.argv) > 1:
+    plt.savefig(fname[:-3]+'png')
+else:
+    plt.show()

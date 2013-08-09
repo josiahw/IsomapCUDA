@@ -14,13 +14,17 @@
 """
 A plotting script for generating the dimensional reconstruction error elbow.
 """
+from DataUtils import loadMatrix
+from numpy import array,corrcoef,dot,sqrt
+import getopt,sys
 
-arg_values = ['mindims=','maxdims=','if=','of=','help','h']
+arg_values = ['mindims=','maxdims=','if=', 'df=','of=','help','h']
 optlist, args = getopt.getopt(sys.argv[1:], 'x', arg_values)
 
-minDims = 3
-maxDims = 12
+minDims = 1
+maxDims = 20
 infile='embedding.csv'
+distfile='distances.csv'
 outfile='embedding.ps'
 saveFile=False
 
@@ -31,6 +35,9 @@ for o in optlist:
 for o in optlist:
     if o[0].strip('-') == 'maxdims':
         srcDims = int(o[1])
+for o in optlist:
+    if o[0].strip('-') == 'df':
+        distfile = o[1]
 for o in optlist:
     if o[0].strip('-') == 'if':
         infile = o[1]
@@ -50,4 +57,25 @@ for o in optlist:
         print "\t--outdims=embedding_dimensions\tDefaults to 3"
         print "\t--indims=input_dimensions\tDefaults to all in the input file"
         print "\t--nonmetric\tEnables non-metric MDS embeddings"
-result = None
+
+result = []
+
+graph_distances = array(loadMatrix(distfile)).flatten()
+
+
+for dim in xrange(minDims,maxDims):
+    embedding = loadMatrix(infile)
+
+    embedding_distances = []
+    for i in xrange(len(embedding)):
+        ei = embedding[i][:dim]
+        for j in xrange(i):
+            embedding_distances.append(embedding_distances[i+j*len(embedding)])
+        for j in xrange(i,len(embedding)):
+            e = ei-embedding[j][:dim]
+            embedding_distances.append(dot(e,e))
+    embedding_distances = corrcoef(sqrt(array(embedding_distances)),graph_distances)
+    residual = (1 - embedding_distances*embedding_distances)[0][1]
+    result.append(residual)
+    print "residual: ",residual
+

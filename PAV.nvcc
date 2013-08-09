@@ -1,0 +1,142 @@
+//GPU implementation of Pool Adjacent Violators algorithm
+//implemented from the paper "An Approach To Parallelizing Isotonic Regression" - Anthony Kearns
+//requires the following defines: 
+//CHUNK_SIZE
+//TOTAL_THREADS
+//STEP_SIZE (ie ceil(CHUNK_SIZE/TOTAL_THREADS))
+//DATA_LENGTH
+//ALPHA
+//memory complexity = 2*4*CHUNK_SIZE + 10*4*TOTAL_THREADS
+
+//implement a pass of PAV at point i
+__device__ unsigned int PAVstep (const unsigned int i, const unsigned int offset, const unsigned int stepSize, float* isoChunk) {
+    unsigned int newi = i;
+    const unsigned int limit = min(stepSize,CHUNK_SIZE-offset);
+    
+    if (isoChunk[offset+i] > isoChunk[offset+i+1]) { //if we have a non-monotonic section, do PAV
+        unsigned int mini = i;
+        unsigned int maxi = i+2;
+        float size = 2.;
+        float sum = isoChunk[offset+i]+isoChunk[offset+i+1];
+        
+        for (unsigned int k = 0; k < 7; ++k) {
+            //expand right:
+            while (maxi < limit and isoChunk[offset+maxi]*size < sum) {
+                sum += isoChunk[offset+maxi];
+                ++maxi;
+                size += 1.;
+            }
+            //expand left:
+            while (mini > 0 and isoChunk[offset+mini-1]*size > sum) {
+                --mini;
+                sum += isoChunk[offset+mini];
+                size += 1.;
+            }
+        }
+        sum /= size;
+        for (unsigned int j = mini; j < maxi; ++j) {
+            isoChunk[offset+j] = sum;
+        }
+        
+        //jump to the end of the isotone
+        newi = maxi-2;
+    }
+    return newi;
+}
+
+//implement a pass of PAV at point i
+__device__ unsigned int PAVjoin (const unsigned int i, const unsigned int offset, const unsigned int stepSize, float* isoChunk) {
+    unsigned int newi = i;
+    const unsigned int limit = min(stepSize,CHUNK_SIZE-offset);
+    
+    if (isoChunk[offset+i] > isoChunk[offset+i+1]) { //if we have a non-monotonic section, do PAV
+        unsigned int mini = i;
+        unsigned int maxi = i+2;
+        float size = 2.;
+        float sum = isoChunk[offset+i]+isoChunk[offset+i+1];
+        
+        for (unsigned int k = 0; k < 10; ++k) {
+            //expand right:
+            //start with a binary search: (we know the subcomponents are monotonic)
+            unsigned int j = (limit-maxi+1)/2;
+            unsigned int old = maxi;
+            while (j > 0) {
+                while (j > 0 and isoChunk[offset+maxi]*size < sum) {
+                    //sum += isoChunk[offset+maxi];
+                    maxi += j;
+                    j /= 2;
+                }
+                while (j > 0 and isoChunk[offset+maxi]*size > sum) {
+                    //sum += isoChunk[offset+maxi];
+                    maxi -= j;
+                    j /= 2;
+                }
+            }
+            if (isoChunk[offset+maxi]*size > sum) {
+                --maxi;
+            }
+            for (unsigned int j = old; j < maxi; ++j) {
+                sum += isoChunk[offset+j];
+            }
+            size += maxi-old;
+            
+            //expand left:
+            j = (mini+1)/2;
+            old = mini;
+            while (j > 0) {
+                while (j > 0 and isoChunk[offset+mini]*size > sum) {
+                    mini -= j;
+                    j /= 2;
+                }
+                while (j > 0 and isoChunk[offset+mini]*size < sum) {
+                    mini += j;
+                    j /= 2;
+                }
+            }
+            if (isoChunk[offset+mini]*size < sum) {
+                ++mini;
+            }
+            for (unsigned int j = mini; j < old; ++j) {
+                sum += isoChunk[offset+j];
+            }
+            size += old-mini;
+            
+        }
+        
+        
+        
+        //jump to the end of the isotone
+        newi = maxi-2;
+    }
+    return newi;
+}
+
+__global__ void PAV(const float* distChunk, float* isoChunk, float scaleFactor) {
+    const unsigned int v = threadIdx.x;
+    unsigned int stepSize = STEP_SIZE;
+    
+    //FIRST STEP: check every single pair for isotones
+    unsigned int offset = v*stepSize;
+    unsigned int limit = min(stepSize,CHUNK_SIZE-offset);
+    for (unsigned int i = 0; i < limit; ++i) {
+        isoChunk[offset+i] = scaleFactor*distChunk[offset+i];
+    }
+    for (unsigned int i = 0; i < limit-1; ++i) {
+        i = PAVstep(i,offset,stepSize,isoChunk);
+    }
+    __syncthreads();
+    
+    //SECOND STEP: recursively check dataset joins (log time parallel algorithm)
+    while (stepSize < CHUNK_SIZE) { //only run our thread while it is useful
+        stepSize *= 2;
+        if (CHUNK_SIZE > v*stepSize+stepSize/2) {
+            PAVjoin(stepSize/2-1,v*stepSize,stepSize,isoChunk); //we are doing updates on isoChunk only now
+        }
+        __syncthreads(); //sync all our data before doing the next update
+    }
+    //THIRD STEP: convert into scaled deltas to multiply our vector directions by now done by the SCALE kernel
+    /*for (unsigned int i = 0; i < limit; ++i) {
+        isoChunk[offset+i] = (ALPHA/(DATA_LENGTH-1.0))*(1.-isoChunk[offset+i]/distChunk[offset+i]);
+    }*/
+}
+

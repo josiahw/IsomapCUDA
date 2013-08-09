@@ -33,13 +33,17 @@ def Isomap(dataSet,srcDims,trgDims,k,eps=1000000000.):
     knnList = KNN(dataSet,kconfig)
     #knnList = simpleKNN(dataSet,k,eps)
     
-    #saveTable(knnList,'knn.csv')
+    
     
     #then do APSP
     aconfig = APSPConfig(knnList,eps,GPU_MEM_SIZE)
     pathMatrix = APSP(knnList,aconfig)
     del knnList
     
+    #XXX:hacky way of saving this info
+    saveTable(pathMatrix,'distances.csv')
+    
+    """
     #then normalize the matrix
     nconfig = NormMatrixConfig(pathMatrix,GPU_MEM_SIZE)
     normMatrix = NormMatrix(pathMatrix,nconfig)
@@ -48,6 +52,17 @@ def Isomap(dataSet,srcDims,trgDims,k,eps=1000000000.):
     #then get eigenvalues
     embedding = EigenEmbedding(normMatrix,trgDims)
     del normMatrix
+    """
+    
+    #then get the rank matrix
+    origDims = len(pathMatrix)
+    rankMatrix = RankMatrix(pathMatrix)
+    del pathMatrix
+    
+    #then get the NMDS embedding
+    nconfig = NMDSConfig(rankMatrix,trgDims)
+    nconfig['sourceDims'] = origDims
+    embedding = CPUNMDS1(rankMatrix, loadMatrix(dataSet),nconfig)
     
     return embedding
 
@@ -61,7 +76,7 @@ if __name__ == '__main__':
     
     trgDims = 3
     srcDims = 10000000000
-    k =12
+    k =6
     eps = 1000000000.
     infile='swissroll.csv'
     outfile='embedding.csv'
@@ -83,8 +98,8 @@ if __name__ == '__main__':
     for o in optlist:
         if o[0].strip('-') == 'k':
             k = int(o[1])
-    for o in optlist:
-        nonmetric = True
+    #for o in optlist:
+    #    nonmetric = True
         
     for o in optlist:
         if o[0].strip('-') == 'help' or o[1].strip('-') == 'h':

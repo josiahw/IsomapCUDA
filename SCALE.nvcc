@@ -1,0 +1,18 @@
+//GPU implementation distance calculations for the rank matrix
+//requires the following defines: 
+//CHUNK_SIZE
+//TOTAL_THREADS
+//STEP_SIZE (ie ceil(CHUNK_SIZE/TOTAL_THREADS))
+//DATA_DIMS
+//memory complexity = 3*4*CHUNK_SIZE + 6*4*TOTAL_THREADS + DATA_DIMS*DATA_SIZE + 8
+
+__global__ void Scale(const float* distChunk, const float* isoChunk, float* scaledChunk) {
+    
+    const unsigned int v = threadIdx.x;
+    const unsigned int offset = v*STEP_SIZE;
+    const unsigned int limit = min(STEP_SIZE,CHUNK_SIZE-offset);
+    //convert into scaled deltas to multiply our vector directions by
+    for (unsigned int i = 0; i < limit; ++i) {
+        scaledChunk[offset+i] = (ALPHA/(DATA_LENGTH-1.0))*(1.-isoChunk[offset+i]/distChunk[offset+i]);
+    }
+}

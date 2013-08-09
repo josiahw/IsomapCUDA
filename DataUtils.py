@@ -98,6 +98,21 @@ def loadMatrix(dataTable):
         results = array(dataTable).astype(numpy.float32)
     return results
 
+def loadIntMatrix(dataTable):
+    """
+    Load a table either as a list/numpy matrix or as a csv file
+    """
+    results = []
+    if type( "" ) == type( dataTable ):
+        f = open(dataTable)
+        l = f.readlines()
+        f.close()
+        for v in l:
+            results.append(array([float(p) for p in v.strip('\r\n ').split(',')]).flatten().astype(numpy.uint32))
+    else:
+        results = array(dataTable).astype(numpy.uint32)
+    return results
+
 def saveTable(dataTable,filename='data.csv'):
     f = open(filename,'w')
     
