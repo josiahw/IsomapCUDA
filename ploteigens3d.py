@@ -31,7 +31,7 @@ n = 100
 fname = 'embedding.csv'
 
 if len(sys.argv) > 1:
-    fname = sys.argv1
+    fname = sys.argv[1]
 print fname
 f = open(fname)
 f = f.readlines()

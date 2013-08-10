@@ -117,12 +117,14 @@ __global__ void PAV(const float* distChunk, float* isoChunk, float scaleFactor) 
     
     //FIRST STEP: check every single pair for isotones
     unsigned int offset = v*stepSize;
-    unsigned int limit = min(stepSize,CHUNK_SIZE-offset);
+    unsigned int limit = min(stepSize,max(CHUNK_SIZE-(int)offset,0));
     for (unsigned int i = 0; i < limit; ++i) {
         isoChunk[offset+i] = scaleFactor*distChunk[offset+i];
     }
-    for (unsigned int i = 0; i < limit-1; ++i) {
-        i = PAVstep(i,offset,stepSize,isoChunk);
+    if (limit > 0) {
+        for (unsigned int i = 0; i < limit-1; ++i) {
+            i = PAVstep(i,offset,stepSize,isoChunk);
+        }
     }
     __syncthreads();
     

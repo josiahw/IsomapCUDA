@@ -8,8 +8,9 @@
 
 __global__ void RankDist(const unsigned int* Rank, const float* Coords, float* distChunk, float* threadSums) {
     float sum = 0.0;
-    const unsigned int offset = threadIdx.x*STEP_SIZE;
-    const unsigned int limit = min(STEP_SIZE,CHUNK_SIZE-offset);
+    const unsigned int v = threadIdx.x;
+    const unsigned int offset = v*STEP_SIZE;
+    const unsigned int limit = min(STEP_SIZE,max(CHUNK_SIZE-(int)offset,0));
     for (unsigned int i = 0; i < limit; ++i) {
         //calculate distance
         unsigned int pos = (i+offset)*2;
@@ -21,5 +22,5 @@ __global__ void RankDist(const unsigned int* Rank, const float* Coords, float* d
         sum += distChunk[i+offset] = sqrt(d);
     }
     //have a separate sum vector so we can normalize easily
-    threadSums[threadIdx.x] = sum;
+    threadSums[v] = sum/DATA_LENGTH;
 }

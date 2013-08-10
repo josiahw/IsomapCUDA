@@ -10,7 +10,7 @@ __global__ void Scale(const float* distChunk, const float* isoChunk, float* scal
     
     const unsigned int v = threadIdx.x;
     const unsigned int offset = v*STEP_SIZE;
-    const unsigned int limit = min(STEP_SIZE,CHUNK_SIZE-offset);
+    const unsigned int limit = min(STEP_SIZE,max(CHUNK_SIZE-(int)offset,0));
     //convert into scaled deltas to multiply our vector directions by
     for (unsigned int i = 0; i < limit; ++i) {
         scaledChunk[offset+i] = (ALPHA/(DATA_LENGTH-1.0))*(1.-isoChunk[offset+i]/distChunk[offset+i]);

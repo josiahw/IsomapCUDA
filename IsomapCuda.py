@@ -478,29 +478,26 @@ def RankMatrix(dataTable):
 #Non-metric MDS algorithm -------------------------------------------------------
 def CPUNMDS1(dataTable,origData,nmdsOptions):
     rank_matrix = loadIntMatrix(dataTable)
-    
-    numchunks = 2 #len(rank_matrix)/200000
+    numchunks = 10 #len(rank_matrix)/200000
     chunksize = len(rank_matrix)/numchunks
     
     rank_matrix = [rank_matrix[i*chunksize:(i+1)*chunksize].astype(numpy.uint32) for i in xrange(numchunks)]
-    
     t0 = time.time()
     
     #prepare an embedding and adjustments
     embeddingCoords = array(origData)[:,:nmdsOptions['targetDims']].astype(numpy.float32) #random.normal(0.,1.,(nmdsOptions['sourceDims'],nmdsOptions['targetDims'])) #.astype(numpy.float32)
-    
     threads = 1024
-    KernelHeader = ('#define DATA_SIZE ('+str(len(embeddingCoords))+')\n'+
+    KernelHeader = ('#define DATA_SIZE ('+str(nmdsOptions['sourceDims'])+')\n'+
                     '#define TOTAL_THREADS ('+str(threads)+')\n'+
-                    '#define DATA_STEP_SIZE ('+str(int(math.ceil(len(embeddingCoords)*1.0/float(threads))))+')\n'+
+                    '#define DATA_STEP_SIZE ('+str(int(math.ceil(nmdsOptions['sourceDims']/float(threads))))+')\n'+
                     '#define DATA_LENGTH ('+str(nmdsOptions['sourceDims'])+')\n'+
                     '#define DATA_DIMS ('+str(nmdsOptions['targetDims'])+')\n'+
-                    '#define ALPHA (0.5)\n')
+                    '#define ALPHA (0.15)\n')
     LastKernelHeader = ('#define CHUNK_SIZE ('+str(len(rank_matrix[-1]))+')\n'+
-                             '#define STEP_SIZE ('+str(int(math.ceil(len(rank_matrix[-1])*1.0/float(threads))))+')\n'+
+                             '#define STEP_SIZE ('+str(int(math.ceil(len(rank_matrix[-1])/float(threads))))+')\n'+
                              KernelHeader)
     KernelHeader = ('#define CHUNK_SIZE ('+str(chunksize)+')\n'+
-                    '#define STEP_SIZE ('+str(int(math.ceil(chunksize*1.0/float(threads))))+')\n'+
+                    '#define STEP_SIZE ('+str(int(math.ceil(chunksize/float(threads))))+')\n'+
                     KernelHeader)
     
     PAVkernel = KernelHeader + open("PAV.nvcc").read()
@@ -511,8 +508,6 @@ def CPUNMDS1(dataTable,origData,nmdsOptions):
     lastDISTkernel = LastKernelHeader + open("RANKDIST.nvcc").read()
     lastDELTAkernel = LastKernelHeader + open("NMDS.nvcc").read()
     lastSCALEkernel = LastKernelHeader + open("SCALE.nvcc").read()
-    
-    print "stepsize: ",int(math.ceil(chunksize/float(threads)))
     pk = SourceModule(PAVkernel)
     dk = SourceModule(DISTkernel)
     ek = SourceModule(DELTAkernel)
@@ -536,7 +531,7 @@ def CPUNMDS1(dataTable,origData,nmdsOptions):
     sums = zeros(threads).astype(numpy.float32)
     #diffs = zeros((len(rank_matrix),nmdsOptions['targetDims'])).astype(numpy.float32)
     for m in xrange(2000):
-        saveTable(embeddingCoords,'unroll/embedding'+str(m)+'.csv')
+        saveTable(embeddingCoords,'unroll/embedding'+str(m).zfill(4)+'.csv')
         #step 1: get all distances
         t1 = time.time()
         msum = 0.
@@ -546,6 +541,7 @@ def CPUNMDS1(dataTable,origData,nmdsOptions):
                        drv.Out(od[n]),
                        drv.Out(sums),
                        block=(threads,1,1))
+            
             msum += sum(sums)
         #print time.time()-t1, " seconds to run DIST kernel."
         if m == 0:
@@ -554,7 +550,6 @@ def CPUNMDS1(dataTable,origData,nmdsOptions):
         #do a STRESS2 check every so often to see if we should exit
         if m % 100:
             pass
-        
         trg = d0/msum
         #step 2: Pool Adjacent Violators
         t2 = time.time()
@@ -595,6 +590,8 @@ def CPUNMDS1(dataTable,origData,nmdsOptions):
                        drv.Out(d[n]),
                        block=(threads,1,1))
         #print time.time()-t5, " seconds to stitch and scale PAV sets."
+        
+        
         #step 3: modify positions
         t3 = time.time()
         for n in xrange(numchunks):
@@ -604,17 +601,6 @@ def CPUNMDS1(dataTable,origData,nmdsOptions):
                        drv.Out(embeddingCoords),
                        block=(threads,1,1))
         #print time.time()-t3, " seconds to run Delta kernel."
-        
-        """
-        offset = 0
-        i = 0
-        final = (diffs.T*d).T # 0.4*(1.-d.astype(numpy.float64)[0]/od)/nmdsOptions['sourceDims']
-        #print "final calculated"
-        for r in rank_matrix:
-            embeddingCoords[r[0]] -= final[i]
-            embeddingCoords[r[1]] += final[i]
-            i += 1
-        """
         
         print "iter ",m," done"
     print time.time()-t0, " seconds to run NMDS."
@@ -758,4 +744,4 @@ def NMDS(datatable,nmdsOptions):
         embeddingCoords += adjustments/len(adjustments) #*(2./len(adjustments))
     print time.time()-t0, " seconds to run NMDS."
     
-    return embeddingCoords.reshape((len(rank_matrix),nmdsOptions['targetDims']))
+    return embeddingCoords.reshape((nmdsOptions['sourceDims'],nmdsOptions['targetDims']))
