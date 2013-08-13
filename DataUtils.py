@@ -13,7 +13,7 @@
 """
 Data Load/Save/Formatting utilities for use with the GPU isomap algorithms.
 """
-from numpy import array
+from numpy import array,savetxt
 import numpy
 
 def dataConfig(dataTable,settings = {}):
@@ -114,8 +114,4 @@ def loadIntMatrix(dataTable):
     return results
 
 def saveTable(dataTable,filename='data.csv'):
-    f = open(filename,'w')
-    
-    for d in dataTable:
-        f.write(str(list(d)).strip('[] ') + '\n')
-    f.close()
+    savetxt(filename, array(dataTable), delimiter=',')

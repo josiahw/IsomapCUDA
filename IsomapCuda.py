@@ -124,12 +124,17 @@ def KNNKernel(targetChunkSize,options,prefix = ''):
                 "}\n")
     return program
 
-def KNN(dataTable,knnOptions):
+def KNN(dataTable,knnOptions,normData = True):
     """
     Get a k,epsilon version k nearest neighbours
     """
     #load and format the table for use.
     data = loadTable(dataTable,knnOptions)
+    if normData:
+        dmax = max([amax(d) for d in data])
+        dmin = max([amin(d) for d in data])
+        
+        data = [(d-dmin)/(dmax-dmin+0.00000001) for d in data]
     
     #create the CUDA kernels
     program = SourceModule(KNNKernel(knnOptions['chunkSize'],knnOptions))
@@ -235,9 +240,11 @@ def APSPConfig(dataTable, eps=100000000., gpuMemSize = 512, settings = {}):
     else:
         settings["totalChunks"] = settings["dataLength"]/settings["chunkSize"]
     
-    settings["block"] = (min(max(settings["dataLength"],1),512),1,1) #XXX: fix this for using the device data on max threads
-    g1 = int(math.ceil(settings["dataLength"]/512.))
-    g2 = int(math.ceil(g1/512.))
+    t_threads = 1024
+    settings["t_threads"] = t_threads
+    settings["block"] = (min(max(settings["dataLength"],1),t_threads),1,1) #XXX: fix this for using the device data on max threads
+    g1 = int(math.ceil(settings["dataLength"]/float(t_threads)))
+    g2 = int(math.ceil(g1/float(t_threads)))
     g3 = int(math.ceil(g2/64.))
     settings["grid"] = (max(g1,1),max(g2,1),max(g3,1))
     return settings
@@ -254,7 +261,7 @@ def APSPKernel(targetChunkSize,options,prefix = ''):
     
     #implemented from paper
     progstr = ("__global__ void SSSP(const unsigned int* Edges, const float* Weights, const float* Costs, float* Paths) {\n"+
-               "    const unsigned int v = threadIdx.x+blockIdx.x*512+blockIdx.y*512*512;\n" +
+               "    const unsigned int v = threadIdx.x+blockIdx.x*"+str(options["t_threads"])+"+blockIdx.y*"+str(options["t_threads"])+"*"+str(options["t_threads"])+";\n" +
                "    if (v < "+str(options['dataLength'])+") {\n" +
                "        const unsigned int vertex = v;\n" +
                "        float p = Costs[vertex];\n" +
@@ -473,19 +480,37 @@ def RankMatrix(dataTable):
     result.sort()
     print time.time()-t0, " seconds to compute Rank Matrix."
     
-    return array(result)[:,1:].astype(numpy.uint32)
+    return array(result)[:,1:].astype(numpy.uint32) #,array(result)[:,:1].astype(numpy.float32)
 
 #Non-metric MDS algorithm -------------------------------------------------------
 def CPUNMDS1(dataTable,origData,nmdsOptions):
     rank_matrix = loadIntMatrix(dataTable)
+    del dataTable
     numchunks = 10 #len(rank_matrix)/200000
-    chunksize = len(rank_matrix)/numchunks
+    chunksize = int(math.ceil(len(rank_matrix)/float(numchunks)))
     
-    rank_matrix = [rank_matrix[i*chunksize:(i+1)*chunksize].astype(numpy.uint32) for i in xrange(numchunks)]
+    #if active, we will use the origdist matrix for adjustments
+    usemetric = False
+    
+    #precalculate the stress denominator
+    av = 0.0
+    for i in xrange(1,len(origData)):
+        for j in xrange(i,len(origData)):
+            av += (sqrt(dot((origData[i]-origData[j]),(origData[i]-origData[j]))))
+    av /= len(rank_matrix)
+    stressdenominator = 0.
+    for i in xrange(1,len(origData)):
+        for j in xrange(i,len(origData)):
+            stressdenominator += (sqrt(dot((origData[i]-origData[j]),(origData[i]-origData[j])))-av)**2
+    
+    rm = [rank_matrix[i*chunksize:(i+1)*chunksize].astype(numpy.uint32) for i in xrange(numchunks)]
+    del rank_matrix
+    rank_matrix = rm
     t0 = time.time()
     
     #prepare an embedding and adjustments
-    embeddingCoords = array(origData)[:,:nmdsOptions['targetDims']].astype(numpy.float32) #random.normal(0.,1.,(nmdsOptions['sourceDims'],nmdsOptions['targetDims'])) #.astype(numpy.float32)
+    embeddingCoords = array(origData)[:,:nmdsOptions['targetDims']].astype(numpy.float32) + random.normal(0.,.01,(nmdsOptions['sourceDims'],nmdsOptions['targetDims'])).astype(numpy.float32)
+    #del origData
     threads = 1024
     KernelHeader = ('#define DATA_SIZE ('+str(nmdsOptions['sourceDims'])+')\n'+
                     '#define TOTAL_THREADS ('+str(threads)+')\n'+
@@ -519,23 +544,45 @@ def CPUNMDS1(dataTable,origData,nmdsOptions):
     lpk = SourceModule(lastPAVkernel)
     ldk = SourceModule(lastDISTkernel)
     lek = SourceModule(lastDELTAkernel)
-    lsk = SourceModule(SCALEkernel)
+    lsk = SourceModule(lastSCALEkernel)
     lkernel = lpk.get_function("PAV")
     ldistkernel = ldk.get_function("RankDist")
     ldeltakernel = lek.get_function("NMDS")
     lscalekernel = lsk.get_function("Scale")
     
-    
+    sm = 100000000000000.
     d = [zeros(chunksize).astype(numpy.float32) for n in xrange(numchunks)]
     od = [zeros(chunksize).astype(numpy.float32) for n in xrange(numchunks)]
-    sums = zeros(threads).astype(numpy.float32)
+    sums = zeros(threads).astype(numpy.float64)
     #diffs = zeros((len(rank_matrix),nmdsOptions['targetDims'])).astype(numpy.float32)
-    for m in xrange(2000):
+    for m in xrange(3000):
         saveTable(embeddingCoords,'unroll/embedding'+str(m).zfill(4)+'.csv')
         #step 1: get all distances
         t1 = time.time()
         msum = 0.
-        for n in xrange(numchunks):
+        
+        
+        #do a STRESS2 check every so often to see if we should exit
+        if not m % 100:
+            old_sm = sm
+            p = q = 0
+            sm = 0.
+            for i in xrange(1,len(origData)):
+                for j in xrange(i,len(origData)):
+                    if q >= len(od[p]):
+                        q = q % len(od[p])
+                        p += 1
+                    sm += (od[p][q]-sqrt(dot((origData[i]-origData[j]),(origData[i]-origData[j]))))**2
+                    q += 1
+            sm /= stressdenominator
+            print "STRESS2: ", sm
+            if sm > old_sm*1.1:
+                break
+                #usemetric = True
+            sm = min(sm,old_sm)
+        
+        
+        for n in xrange(numchunks-1):
             distkernel(drv.In(rank_matrix[n]),
                        drv.In(embeddingCoords),
                        drv.Out(od[n]),
@@ -543,64 +590,90 @@ def CPUNMDS1(dataTable,origData,nmdsOptions):
                        block=(threads,1,1))
             
             msum += sum(sums)
+        ldistkernel(drv.In(rank_matrix[-1]),
+                   drv.In(embeddingCoords),
+                   drv.Out(od[-1]),
+                   drv.Out(sums),
+                   block=(threads,1,1))
+        msum += sum(sums[:len(rank_matrix[-1])])
         #print time.time()-t1, " seconds to run DIST kernel."
         if m == 0:
             d0 = msum
-            
-        #do a STRESS2 check every so often to see if we should exit
-        if m % 100:
-            pass
+        
         trg = d0/msum
-        #step 2: Pool Adjacent Violators
-        t2 = time.time()
-        for n in xrange(numchunks):
-            kernel(drv.In(od[n]),
-                   drv.Out(d[n]),
+        
+        if usemetric: #this does iterative metric NMDS
+            for i in xrange(numchunks):
+                d[i] = origDistance[i*chunksize:(i+1)*chunksize]
+        else: #else do normal monotonic NMDS
+            
+            #step 2: Pool Adjacent Violators
+            t2 = time.time()
+            for n in xrange(numchunks-1):
+                kernel(drv.In(od[n]),
+                       drv.Out(d[n]),
+                       numpy.float32(trg),
+                       block=(threads,1,1))
+            lkernel(drv.In(od[-1]),
+                   drv.Out(d[-1]),
                    numpy.float32(trg),
                    block=(threads,1,1))
-        #print time.time()-t2, " seconds to run PAV kernel."
-        t5 = time.time()
-        for n in xrange(numchunks-1):
-            if d[n][-1] > d[n+1][0]:
-                imax = 1
-                imin = len(d[n])-1
-                runsum = d[n][-1]+d[n+1][0]
-                runsize = 2.0
-                changed = True
-                while changed:
-                    changed = False
-                    while imax < len(d[n+1]) and runsum > d[n+1][imax]*runsize:
-                        runsum += d[n+1][imax]
-                        runsize += 1.0
-                        imax += 1
-                        changed = True
-                    while imin > 0 and runsum < d[n][imin-1]*runsize:
-                        imin -= 1
-                        runsum += d[n][imin]
-                        runsize += 1.0
-                        changed = True
-                
-                d[n][imin:] = [runsum/runsize]*(len(d[n])-imin)
-                d[n+1][:imax] = [runsum/runsize]*imax
+            
+            
+            #print time.time()-t2, " seconds to run PAV kernel."
+            t5 = time.time()
+            for n in xrange(numchunks-1):
+                if d[n][-1] > d[n+1][0]:
+                    imax = 1
+                    imin = len(d[n])-1
+                    runsum = d[n][-1]+d[n+1][0]
+                    runsize = 2.0
+                    changed = True
+                    while changed:
+                        changed = False
+                        while imax < len(d[n+1]) and runsum > d[n+1][imax]*runsize:
+                            runsum += d[n+1][imax]
+                            runsize += 1.0
+                            imax += 1
+                            changed = True
+                        while imin > 0 and runsum < d[n][imin-1]*runsize:
+                            imin -= 1
+                            runsum += d[n][imin]
+                            runsize += 1.0
+                            changed = True
+                    
+                    d[n][imin:] = [runsum/runsize]*(len(d[n])-imin)
+                    d[n+1][:imax] = [runsum/runsize]*imax
+        
         
         #scale everything ready to add to the points again
-        for n in xrange(numchunks):
+        for n in xrange(numchunks-1):
             scalekernel(drv.In(od[n]),
-                       drv.In(d[n]),
-                       drv.Out(d[n]),
-                       block=(threads,1,1))
+                        drv.In(d[n]),
+                        drv.Out(d[n]),
+                        block=(threads,1,1))
+        lscalekernel(drv.In(od[-1]),
+                    drv.In(d[-1]),
+                    drv.Out(d[-1]),
+                    block=(threads,1,1))
         #print time.time()-t5, " seconds to stitch and scale PAV sets."
         
         
         #step 3: modify positions
         t3 = time.time()
-        for n in xrange(numchunks):
+        for n in xrange(numchunks-1):
             deltakernel(drv.In(rank_matrix[n]),
                        drv.In(d[n]),
                        drv.In(embeddingCoords),
                        drv.Out(embeddingCoords),
                        block=(threads,1,1))
+        ldeltakernel(drv.In(rank_matrix[-1]),
+                       drv.In(d[-1]),
+                       drv.In(embeddingCoords),
+                       drv.Out(embeddingCoords),
+                       block=(threads,1,1))
         #print time.time()-t3, " seconds to run Delta kernel."
+        
         
         print "iter ",m," done"
     print time.time()-t0, " seconds to run NMDS."
@@ -640,108 +713,3 @@ def NMDSConfig(dataTable, targetDims, gpuMemSize = 512, settings = {}):
     g3 = int(math.ceil(g2/64.))
     settings["grid"] = (max(g1,1),max(g2,1),max(g3,1))
     return settings
-
-def NMDSKernel(targetChunkSize,options,prefix = ''):
-    """
-    Return the string representation of the desired tiled KNN kernel.
-    We do this twice for different target chunk sizes so we can handle odd length data.
-    """
-    chunkSize = targetChunkSize
-    
-    #a very naive NMDS implementation which may not work
-    progstr = ("__global__ void NMDS(const unsigned int* RankChunk, const float* Coords, double* Adjustments, const long Coord_Offset) {\n"+
-               "    const unsigned int v = threadIdx.x+blockIdx.x*512+blockIdx.y*512*512;\n" +
-               "    if (v+Coord_Offset < "+str(options['sourceDims'])+" and v < "+str(options['chunkSize'])+") {\n" +
-               "        double distance = 0.;\n" +
-               "        const unsigned int vertex = (v+Coord_Offset)*"+str(options['targetDims'])+";\n" +
-               "        const unsigned int vertex2 = (v)*"+str(options['targetDims'])+";\n" +
-               "        for (unsigned int i = 0; i < "+str(options['targetDims'])+"; i++) {\n" +
-               "            Adjustments[i+vertex2] = 0.;\n" +
-               "        }\n"+
-               "        for (unsigned int i = 1; i < "+str(options['sourceDims'])+"; i++) {\n" +
-               "            const unsigned int p = (Rank[i+v*"+str(options['sourceDims'])+"])*"+str(options['targetDims'])+";\n" +
-               "            double d = 0.0;\n" +
-               "            for (unsigned int j = 0; j < "+str(options['targetDims'])+"; j++) {\n" +
-               "                d += (Coords[j+vertex]-Coords[j+p])*(Coords[j+vertex]-Coords[j+p]);\n" +
-               "            }\n" +
-               "            d = sqrt(d);\n" +
-               "            if (distance > d and vertex != p) {\n" +
-               "                for (unsigned int j = 0; j < "+str(options['targetDims'])+"; j++) {\n" +
-               "                    Adjustments[j+vertex] += (distance-d)*(Coords[j+vertex]-Coords[j+p])/d;\n" +
-               "                }\n" +
-               "            } else {\n" +
-               "                distance = d;\n" +
-               "            }\n" +
-               "        }\n"+
-               "    }\n" +
-               "}\n")
-    progstr =  ("__global__ void getDistChunks(const unsigned int* RankChunk, const unsigned float* distChunk, const float* Coords, float* Adjustments, const float distOffset) {\n"+
-                "    const unsigned int v = threadIdx.x;\n"+
-                "    if (v < "+str(chunkSize)+") {\n"+
-                "        double origDist = 0.; //Calculate distance\n"+
-                "        for (unsigned int j = 0; j < "+str(options['targetDims'])+"; ++j) {\n"+
-                "            origDist += (Coords[RankChunk[2*v]*"+str(options['targetDims'])+"+j] - Coords[RankChunk[2*v+1]*"+str(options['targetDims'])+"+j])*\n"+
-                "                        (Coords[RankChunk[2*v]*"+str(options['targetDims'])+"+j] - Coords[RankChunk[2*v+1]*"+str(options['targetDims'])+"+j]);\n"+
-                "        }\n"+
-                "        origDist = sqrt(origDist);\n"+
-                "        distChunk[v] = max(origDist,distOffset); //Set initial distances\n"+
-                "        __syncthreads();\n"+
-                "        for (unsigned int i = 0; i < 100; ++i) { //XXX: 100 is a heuristic hack\n"+
-                "            if (distChunk[v*2] > distChunk[v*2+1]) {\n"+
-                "                distChunk[v*2+1] = distChunk[v*2];\n"+
-                "            }\n"+
-                "            __syncthreads();\n"+
-                "        }\n"+
-                "        distChunk[v] = distChunk[v]-origDist;\n"+
-                "        __syncthreads();\n"+
-                "        for (unsigned int i = 0; i < "+str(options['totalChunks'])+" and i*"+str(chunkSize)+"+v < "+str(options['sourceDims'])+"; ++i) {\n"+
-                "            for (unsigned int j = 0; j < "+str(chunkSize)+"; ++j) {\n"+
-                "                if (RankChunk[j*2] == i*"+str(chunkSize)+"+v and distChunk[j] > 0.) {\n"+
-                "                    for (unsigned int k = 0; k < "+str(options['targetDims'])+"; ++k) {\n"+
-                "                        Adjustments[RankChunk[2*j]*"+str(options['targetDims'])+"+k] += \n"+
-                "                            (Coords[RankChunk[2*j]*"+str(options['targetDims'])+"+k] - \n"+
-                "                             Coords[RankChunk[2*j+1]*"+str(options['targetDims'])+"+k])*\n"+
-                "                             distChunk[j]*0.5;\n"+
-                "                    }\n"+
-                "                } else if (RankChunk[j*2+1] == i*"+str(chunkSize)+"+v and distChunk[j] > 0.) {\n"+
-                "                    for (unsigned int k = 0; k < "+str(options['targetDims'])+"; ++k) {\n"+
-                "                        Adjustments[RankChunk[2*j]*"+str(options['targetDims'])+"+k] -= \n"+
-                "                            (Coords[RankChunk[2*j]*"+str(options['targetDims'])+"+k] - \n"+
-                "                             Coords[RankChunk[2*j+1]*"+str(options['targetDims'])+"+k])*\n"+
-                "                             distChunk[j]*0.5;\n"+
-                "                    }\n"+
-                "                }\n"+
-                "            }\n"+
-                "        }\n"+
-                "    }\n"+
-                "}\n")
-    print progstr
-    return progstr
-
-def NMDS(datatable,nmdsOptions):
-    rank_matrix = loadIntMatrix(datatable)
-    
-    t0 = time.time()
-    nmds1 = SourceModule(NMDSKernel(nmdsOptions['chunkSize'],nmdsOptions))
-    kernel = nmds1.get_function("NMDS")
-    
-    embeddingCoords = random.normal(0.,1.,(len(rank_matrix)*nmdsOptions['targetDims'])).astype(numpy.float64)
-    adjustments = zeros(len(rank_matrix)*nmdsOptions['targetDims']).astype(numpy.float64)
-    adj = zeros(nmdsOptions['chunkSize']*nmdsOptions['targetDims']).astype(numpy.float64)
-    for i in xrange(2): #XXX: should calculate stress every reasonable number of steps
-        for v in xrange(0,nmdsOptions['dataLength'],nmdsOptions['chunkSize']):
-            kernel(drv.In(rank_matrix[v:(v+nmdsOptions['chunkSize'])].flatten().astype(numpy.uint32)),
-                   drv.In(embeddingCoords),
-                   drv.Out(adj),
-                   drv.In(numpy.int64(v)),
-                   grid=nmdsOptions['grid'],
-                   block=nmdsOptions['block'])
-            if v < nmdsOptions['totalChunks']:
-                adjustments[v*nmdsOptions['targetDims']:(v+nmdsOptions['chunkSize'])*nmdsOptions['targetDims']] = adj
-            else:
-                adjustments[v*nmdsOptions['targetDims']:(v+nmdsOptions['chunkSize'])*nmdsOptions['targetDims']] = adj[:nmdsOptions['lastChunkSize']*nmdsOptions['targetDims']]
-            print adjustments/len(adjustments)
-        embeddingCoords += adjustments/len(adjustments) #*(2./len(adjustments))
-    print time.time()-t0, " seconds to run NMDS."
-    
-    return embeddingCoords.reshape((nmdsOptions['sourceDims'],nmdsOptions['targetDims']))

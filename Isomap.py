@@ -22,7 +22,7 @@ import getopt,sys
 
 GPU_MEM_SIZE = 512
 
-def Isomap(dataSet,srcDims,trgDims,k,eps=1000000000.):
+def Isomap(dataSet,srcDims,trgDims,k,eps=1000000000., saveSteps = False):
     """
     Classical isomap
     """
@@ -41,7 +41,8 @@ def Isomap(dataSet,srcDims,trgDims,k,eps=1000000000.):
     del knnList
     
     #XXX:hacky way of saving this info
-    saveTable(pathMatrix,'distances.csv')
+    if saveSteps:
+        saveTable(pathMatrix,'distances.csv')
     
     """
     #then normalize the matrix
@@ -74,9 +75,9 @@ if __name__ == '__main__':
     arg_values = ['nonmetric=','outdims=','indims=','if=','of=','k=','eps=','help','h']
     optlist, args = getopt.getopt(sys.argv[1:], 'x', arg_values)
     
-    trgDims = 3
+    trgDims = 2
     srcDims = 10000000000
-    k =6
+    k =12
     eps = 1000000000.
     infile='swissroll.csv'
     outfile='embedding.csv'
