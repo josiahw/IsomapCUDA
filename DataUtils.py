@@ -64,7 +64,7 @@ def loadTable(dataTable,options):
         results.append(dt[-(len(dt)%options["chunkSize"]):,:options["sourceDims"]].astype(numpy.float32).flatten())
     return results
 
-def loadSplitTable(dataTable,options):
+def loadSplitTable(dataTable):
     """
     Load a table either as a list/numpy matrix or as a csv file
     """
@@ -76,11 +76,11 @@ def loadSplitTable(dataTable,options):
         f.close()
         for v in l:
             l = v.strip('\r\n ').split(',')
-            results1.append(array([int(p) for p in l[:len(l)/2]]).flatten().astype(numpy.uint32))
-            results2.append(array([float(p) for p in l[len(l)/2:]]).flatten().astype(numpy.float32))
+            results1.append(array([int(p) for p in l[:len(l)/2]]).astype(numpy.uint32))
+            results2.append(array([float(p) for p in l[len(l)/2:]]).astype(numpy.float32))
     else:
-        results1 = array(dataTable)[:,:len(dataTable[0])/2].flatten().astype(numpy.uint32)
-        results2 = array(dataTable)[:,len(dataTable[0])/2:].flatten().astype(numpy.float32)
+        results1 = array(dataTable)[:,:len(dataTable[0])/2].astype(numpy.uint32)
+        results2 = array(dataTable)[:,len(dataTable[0])/2:].astype(numpy.float32)
     return [results1,results2]
 
 def loadMatrix(dataTable):
