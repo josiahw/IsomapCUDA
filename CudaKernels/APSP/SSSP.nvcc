@@ -1,0 +1,72 @@
+/* Shortest path Search to a Single Point for large datasets
+####################################################################################################################################################
+#Copyright (c) 2013, Josiah Walker
+#All rights reserved.
+#
+#Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+#
+#    Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+#    Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or #other materials provided with the distribution.
+#
+#THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED #WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY #DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS #OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING #NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+####################################################################################################################################################
+*/
+
+/**
+* This kernel calculates the shortest path from all points to the currently selected point using the KNN values given.
+* Due to lack of memory synchronisation across blocks, we run the kernel repeatedly as a copy from one list to the other,
+* expanding the shortest path search by one set of vertices at a time. Leveraging large numbers of simple cores, we run one
+* thread per vertex, all in parallel. This should scale well to high end GPUs. 
+* Implementation adapted from the paper 'Accelerating Large Graph Algorithms on the GPU Using CUDA'
+*
+* @param Edges Our "Source" chunk of data to do KNN on
+* @param Weights Our "Target" chunk, the chunk we are comparing distances to
+* @param Costs The dimensionality of the source/target data
+* @param Paths The indexes to the nearest k neighbours (matches with distances)
+* @param dataSize The total number of data elements we are processing (for bounds checking)
+* @param kMax The number of nodes to include in our K nearest
+* @param epsilon Our epsilon to limit the distance of KMeans by
+* @param maxThreads The number of threads the host CUDA version supports
+*
+* @author Josiah Walker
+*/
+#define MAXBLOCKS 65536 //this will probably never get used, but in the event that we are over 10 million objects it helps.
+
+__global__ void SSSP(const unsigned int* Edges, 
+                     const float* Weights, 
+                     const float* Costs, 
+                     float* Paths,
+                     unsigned int* AnyChange,
+                     const long dataSize,
+                     const long kMax,
+                     const float epsilon,
+                     const long maxThreads) {
+    
+    //calculate our vertex position
+    const unsigned int vertex = threadIdx.x+blockIdx.x*maxThreads+blockIdx.y*maxThreads*MAXBLOCKS;
+    
+    //check the thread is inside the dataset
+    if (vertex < dataSize) {
+        
+        //cache our initial cost changes locally
+        float p = Costs[vertex];
+        bool Changed = false;
+        
+        //for all neighbours, check whether distance to neighbour + edge weight < initial cost, and if so replace
+        for(unsigned int i = 0; Weights[vertex*kMax+i] < epsilon and i < kMax; ++i) {
+            const unsigned int neighbourid = vertex*kMax+i;
+            const float d = (Costs[Edges[neighbourid]]+Weights[neighbourid]);
+            if (d < p) {
+                p = d;
+                Changed = true;
+            }
+        }
+        
+        //save back into memory
+        if (Changed) {
+            AnyChange[0] = 1;
+        }
+        Paths[vertex] = p;
+    }
+}
+

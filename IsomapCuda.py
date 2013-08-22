@@ -15,6 +15,7 @@ GPU and CPU based K nearest neighbours algorithms.
 
 import time
 from numpy import array,zeros,amax,amin,sqrt,dot,random
+import scipy
 import numpy
 from numpy.linalg import eig
 import pycuda.autoinit
@@ -28,143 +29,195 @@ from KNearestNeighbours import KNN
 from NonMetricMultiDimensionalScaling import NMDS
 
 # APSP Algorithm ---------------------------------------------------
+KernelLocation = "CudaKernels/APSP/"
 
 def APSPConfig(dataTable, eps=100000000., gpuMemSize = 512, settings = {}):
     """
     Creates all the memory/data settings to run GPU accelerated APSP.
     """
     
-    
     settings = dataConfig(dataTable,settings)
-    settings["sourceDims"] /= 2 #the data has indices and values on the same line this time
     
+    #XXX: determine memory and thread sizes from device
     settings["memSize"] = gpuMemSize*1024*1024
-    settings["k"] = settings["sourceDims"]
-    settings["eps"] = eps
+    settings["maxThreads"] = 1024
     
-    #calculate memory constraints for the KNN chunks
-    knnMem = settings["k"]*(4+4)*settings["dataLength"] #we have ( k * size( float + int ) * dataLength ) for our neighbour list
-    chunkMem = settings["memSize"]-knnMem
-    if chunkMem < settings["sourceDims"]*4*4:
-        raise "GPU memory too small for KNN list!"
-    chunkMem /= settings["sourceDims"]*4*4
+    #set up chunk sizes - in this case degenerate
+    settings["chunkSize"] = settings["dataLength"]
     
-    settings["chunkSize"] = 1 #min(chunkMem,512)
+    #create kernel gridsize tuples
+    settings["block"] = (settings["maxThreads"],1,1)
+    settings["grid"] = (max(int(math.ceil(float(settings["chunkSize"])/settings["maxThreads"])),1),1,1)
     
-    settings["lastChunkSize"] = settings["dataLength"] % settings["chunkSize"]
+    #precalculate all constant kernel params
+    settings["dimensions"] = numpy.int64(settings["sourceDims"])
+    settings["k"] = numpy.int64(settings["sourceDims"])
+    settings["eps"] = numpy.float32(eps)
+    settings["dataSize"] = numpy.int64(settings["dataLength"])
+    settings["chunkSize"] = numpy.int64(settings["chunkSize"])
+    settings["maxThreads"] = numpy.int64(settings["maxThreads"])
     
-    if settings["lastChunkSize"] > 0:
-        settings["totalChunks"] = settings["dataLength"]/settings["chunkSize"]+1
-    else:
-        settings["totalChunks"] = settings["dataLength"]/settings["chunkSize"]
-    
-    t_threads = 1024
-    settings["t_threads"] = t_threads
-    settings["block"] = (min(max(settings["dataLength"],1),t_threads),1,1) #XXX: fix this for using the device data on max threads
-    g1 = int(math.ceil(settings["dataLength"]/float(t_threads)))
-    g2 = int(math.ceil(g1/float(t_threads)))
-    g3 = int(math.ceil(g2/64.))
-    settings["grid"] = (max(g1,1),max(g2,1),max(g3,1))
     return settings
     
 
-def APSPKernel(targetChunkSize,options,prefix = ''):
-    """
-    Return the string representation of the desired tiled KNN kernel.
-    We do this twice for different target chunk sizes so we can handle odd length data.
-    """
-    #choose a multiple of 2 for unrolling
-    unroll = 1
-    
-    
-    #implemented from paper
-    progstr = ("__global__ void SSSP(const unsigned int* Edges, const float* Weights, const float* Costs, float* Paths) {\n"+
-               "    const unsigned int v = threadIdx.x+blockIdx.x*"+str(options["t_threads"])+"+blockIdx.y*"+str(options["t_threads"])+"*"+str(options["t_threads"])+";\n" +
-               "    if (v < "+str(options['dataLength'])+") {\n" +
-               "        const unsigned int vertex = v;\n" +
-               "        float p = Costs[vertex];\n" +
-               "        unsigned int i = 0;\n" +
-               "        while (Weights[vertex*"+str(options['k'])+"+i] < "+str(options['eps'])+" and i < "+str(options['k'])+") {\n" +
-               "            const unsigned int neighbourid = vertex*"+str(options['k'])+"+i;\n" +
-               "            const double d = (Costs[Edges[neighbourid]]+Weights[neighbourid]);\n" +
-               "            p = min(p,d);\n" +
-               "            i++;\n" +
-               "        }\n"+
-               "        Paths[vertex] = p;\n" +
-               "    }\n" +
-               "}\n")
-    #print progstr
-    return progstr
 
-
-def APSP(dataTable,apspOptions):
-    knn_refs,knn_dists = loadSplitTable(dataTable,apspOptions)
-    knn_refs = knn_refs.astype(numpy.uint32)
-    knn_dists = knn_dists.astype(numpy.float32)
-    
-    #neighbours = numpy.int32(self.number_of_neighbours)
-    
-    sssp1 = SourceModule(APSPKernel(apspOptions['chunkSize'],apspOptions))
-    kernel = sssp1.get_function("SSSP")
-    
-    #print str(self.data_length/self.num_threads),self.data_length/self.num_threads*200
-    
-    Costs0 = array([apspOptions['eps']]*apspOptions['dataLength']).astype(numpy.float32)
-    Matrix = []
+def APSP(knn_refs,knn_dists,eps):
+    #timekeeping for profiling purposes
     t0 = time.time()
     
+    apspOptions = APSPConfig(knn_dists,eps)
+    
+    #create the kernel
+    sssp1 = SourceModule(open(KernelLocation+"SSSP.nvcc").read())
+    kernel = sssp1.get_function("SSSP")
+    
+    #create our template cost list
+    Costs0 = array([apspOptions['eps']]*apspOptions['dataLength']).astype(numpy.float32)
+    Matrix = []
+    
+    
+    #initialise our memory of how many iterations the previous row took to solve (used as a termination heuristic)
+    last = 50
+    
+    #make a changed flag
+    changed = numpy.zeros(1).astype(numpy.uint32)
+    
+    #initialise our GPU resident memory arrays
+    refs_gpu = drv.mem_alloc(knn_refs.nbytes)
+    dists_gpu = drv.mem_alloc(knn_dists.nbytes)
+    costs1_gpu = drv.mem_alloc(Costs0.nbytes)
+    costs2_gpu = drv.mem_alloc(Costs0.nbytes)
+    
+    changed_gpu = drv.mem_alloc(changed.nbytes)
+    
+    #copy static data onto the GPU
+    drv.memcpy_htod(refs_gpu, knn_refs)
+    drv.memcpy_htod(dists_gpu, knn_dists)
+    
     #iterate through every row of the path cost matrix
-    last = 70
-    for v in xrange(0,apspOptions['dataLength'],apspOptions['chunkSize']):
+    for v in xrange(0,apspOptions['dataLength']):
         
-        #create a new row for the cost matrix
+        #create a new row for the cost matrix, from the template list
         Costs = Costs0.copy().astype(numpy.float32)
         
+        #pre-populate the costs with entries we've already solved
         Costs[v] = 0.
         for n in xrange(v):
             Costs[n] = Matrix[n][v]
-        v2 = v*apspOptions['k']
         
-        #initialise the costs we have for the immediate neighbours
+        
+        #initialise the costs we have for the immediate neighbours (this saves a single iteration of SSSP, and is faster to do this way)
         for n in xrange(apspOptions['k']):
-            if knn_dists[v2+n] < apspOptions['eps']:
-                #print v2+n,knn_dists[v2+n]
-                Costs[knn_refs[v2+n]] = knn_dists[v2+n]
+            if knn_dists[v][n] < apspOptions['eps']:
+                Costs[knn_refs[v][n]] = knn_dists[v][n]
         
-        Costs2 = Costs.copy().astype(numpy.float32)
+        #copy the initial Costs row into the gpu
+        drv.memcpy_htod(costs1_gpu, Costs)
+        
         
         #iteratively expand the shortest paths (1 iter per kernel run) until we have all the paths
-        for i in xrange(last-3):
-            kernel(drv.In(knn_refs),drv.In(knn_dists),drv.In(Costs),drv.Out(Costs2),grid=apspOptions['grid'],block=apspOptions['block'])
-            kernel(drv.In(knn_refs),drv.In(knn_dists),drv.In(Costs2),drv.Out(Costs),grid=apspOptions['grid'],block=apspOptions['block'])
-        l = last-3
+        for i in xrange(last-5):
+            #use 2 kernels copying back and forth between cost matrices to ensure no sync issues
+            kernel( refs_gpu,
+                    dists_gpu,
+                    costs1_gpu,
+                    costs2_gpu,
+                    changed_gpu,
+                    apspOptions['dataSize'],
+                    apspOptions['k'],
+                    apspOptions['eps'],
+                    apspOptions['maxThreads'],
+                    grid=apspOptions['grid'],
+                    block=apspOptions['block'])
+            kernel( refs_gpu,
+                    dists_gpu,
+                    costs2_gpu,
+                    costs1_gpu,
+                    changed_gpu,
+                    apspOptions['dataSize'],
+                    apspOptions['k'],
+                    apspOptions['eps'],
+                    apspOptions['maxThreads'],
+                    grid=apspOptions['grid'],
+                    block=apspOptions['block'])
+        l = last-5
         
-        
-        #XXX: this is expensive, find a better way
-        while amax(Costs) > 100000.:
-            kernel(drv.In(knn_refs),drv.In(knn_dists),drv.In(Costs),drv.Out(Costs2),grid=apspOptions['grid'],block=apspOptions['block'])
-            kernel(drv.In(knn_refs),drv.In(knn_dists),drv.In(Costs2),drv.Out(Costs),grid=apspOptions['grid'],block=apspOptions['block'])
+        #XXX: is this the best way to pass a flag back?
+        cval = 1
+        changed[0] = 0
+        drv.memcpy_htod(changed_gpu, changed)
+        while cval != 0 or l > 1000:
+            kernel( refs_gpu,
+                    dists_gpu,
+                    costs1_gpu,
+                    costs2_gpu,
+                    changed_gpu,
+                    apspOptions['dataSize'],
+                    apspOptions['k'],
+                    apspOptions['eps'],
+                    apspOptions['maxThreads'],
+                    grid=apspOptions['grid'],
+                    block=apspOptions['block'])
+            kernel( refs_gpu,
+                    dists_gpu,
+                    costs2_gpu,
+                    costs1_gpu,
+                    changed_gpu,
+                    apspOptions['dataSize'],
+                    apspOptions['k'],
+                    apspOptions['eps'],
+                    apspOptions['maxThreads'],
+                    grid=apspOptions['grid'],
+                    block=apspOptions['block'])
             l += 1
-            #print Costs
+            drv.memcpy_dtoh(changed, changed_gpu)
+            cval = changed[0]
+            changed[0] = 0
+            drv.memcpy_htod(changed_gpu, changed)
             
-        last = l
+        last = max(l,1)
         
-        
-        #do a few extra iterations in case we missed the shortest paths
-        for i in xrange(15):
-            kernel(drv.In(knn_refs),drv.In(knn_dists),drv.In(Costs),drv.Out(Costs2),block=apspOptions['block'])
-            kernel(drv.In(knn_refs),drv.In(knn_dists),drv.In(Costs2),drv.Out(Costs),block=apspOptions['block'])
-        
-        #print Costs
-        
+        """
+        #since our termination criterion is heuristic, do a few extra iterations in case we missed the shortest paths
+        for i in xrange(30):
+            kernel( refs_gpu,
+                    dists_gpu,
+                    costs1_gpu,
+                    costs2_gpu,
+                    apspOptions['dataSize'],
+                    apspOptions['k'],
+                    apspOptions['eps'],
+                    apspOptions['maxThreads'],
+                    grid=apspOptions['grid'],
+                    block=apspOptions['block'])
+            kernel( refs_gpu,
+                    dists_gpu,
+                    costs2_gpu,
+                    costs1_gpu,
+                    apspOptions['dataSize'],
+                    apspOptions['k'],
+                    apspOptions['eps'],
+                    apspOptions['maxThreads'],
+                    grid=apspOptions['grid'],
+                    block=apspOptions['block'])
+        """
+        #copy costs back into memory
+        drv.memcpy_dtoh(Costs, costs1_gpu)
+        """
         #copy our paths to the diagonally reflected side of the matrix, to guarantee symmetry
         for n in xrange(v):
             Matrix[n][v] = Costs[n]
-        
+        """
         
         #add the row to the matrix
         Matrix.append(Costs)
-        
+    
+    #explicitly free gpu memory
+    del costs1_gpu
+    del costs2_gpu
+    del refs_gpu
+    del dists_gpu
+    
     print time.time()-t0, " seconds to create shortest paths."
     
     """
@@ -273,22 +326,7 @@ def EigenEmbedding(dataTable, finalDims = 3):
     return e
 
 #Get RankMatrix --------------------------------------------------------
-"""
-#XXX: need global ranks, not ranks per index
-def RankMatrix(dataTable):
-    t0 = time.time()
-    
-    result = []
-    
-    for l in dataTable:
-        sl = zip(l,range(len(l)))
-        sl.sort()
-        result.append(array(zip(*sl)[1]))
-    
-    print time.time()-t0, " seconds to compute Rank Matrix."
-    
-    return array(result)
-"""
+
 def RankMatrix(dataTable):
     t0 = time.time()
     result = []
