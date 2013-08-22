@@ -44,8 +44,6 @@ def KNNConfig(dataTable,srcDims, k, eps = 1000000000.,gpuMemSize = 512, settings
     memoryPerElement = k*4*2*settings["dataLength"] + (settings["sourceDims"]*4)*2 + 20*4 #this is an estimated memory used per element
     settings["chunkSize"] = min(int(math.ceil(float(settings["memSize"])/memoryPerElement)),settings["dataLength"])
     settings["lastChunkSize"] = ((settings["dataLength"]-1) % settings["chunkSize"]) + 1
-    #if settings["lastChunkSize"] == 0:
-    #    settings["lastChunkSize"] = settings["chunkSize"]
     
     #create kernel gridsize tuples
     settings["block"] = (settings["maxThreads"],1,1)
@@ -59,11 +57,9 @@ def KNNConfig(dataTable,srcDims, k, eps = 1000000000.,gpuMemSize = 512, settings
     settings["chunkSize"] = numpy.int64(settings["chunkSize"])
     settings["maxThreads"] = numpy.int64(settings["maxThreads"])
     
-    
-    
     return settings
 
-def KNN(dataTable, k, epsilon, srcDims = 1000000000000000, normData = True):
+def KNN(dataTable, k, epsilon, srcDims = 1000000000000000, normData = False):
     """
     Get a k,epsilon version k nearest neighbours
     """
