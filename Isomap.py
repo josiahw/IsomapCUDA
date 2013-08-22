@@ -88,7 +88,7 @@ if __name__ == '__main__':
     
     trgDims = 3
     srcDims = 10000000000
-    k =6
+    k =7
     eps = 1000000000.
     infile='swissroll.csv'
     outfile='embedding.csv'

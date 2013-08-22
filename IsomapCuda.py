@@ -22,6 +22,7 @@ import pycuda.autoinit
 import pycuda.driver as drv
 from pycuda.compiler import SourceModule
 import math
+import random
 
 
 from DataUtils import dataConfig,loadTable,loadSplitTable,loadMatrix,loadIntMatrix,saveTable
@@ -67,9 +68,11 @@ def APSP(knn_refs,knn_dists,eps):
     
     apspOptions = APSPConfig(knn_dists,eps)
     
-    #create the kernel
+    #create the kernels
     sssp1 = SourceModule(open(KernelLocation+"SSSP.nvcc").read())
     kernel = sssp1.get_function("SSSP")
+    seedprev = SourceModule(open(KernelLocation+"SEEDPREVIOUS.nvcc").read())
+    seed = seedprev.get_function("SEEDPREVIOUS")
     
     #create our template cost list
     Costs0 = array([apspOptions['eps']]*apspOptions['dataLength']).astype(numpy.float32)
@@ -99,12 +102,7 @@ def APSP(knn_refs,knn_dists,eps):
         
         #create a new row for the cost matrix, from the template list
         Costs = Costs0.copy().astype(numpy.float32)
-        
-        #pre-populate the costs with entries we've already solved
         Costs[v] = 0.
-        for n in xrange(v):
-            Costs[n] = Matrix[n][v]
-        
         
         #initialise the costs we have for the immediate neighbours (this saves a single iteration of SSSP, and is faster to do this way)
         for n in xrange(apspOptions['k']):
@@ -114,58 +112,66 @@ def APSP(knn_refs,knn_dists,eps):
         #copy the initial Costs row into the gpu
         drv.memcpy_htod(costs1_gpu, Costs)
         
+        #pre-populate the costs with entries we've already solved
+        #XXX: 10 is a hack, should be the degree of the vertex
+        prefill = min(len(Matrix),10)
+        for i in xrange(len(knn_refs[v])):
+            s = knn_refs[v][i]
+            if s < v and knn_dists[v][i] < apspOptions['eps']:
+                drv.memcpy_htod(costs2_gpu, Matrix[s])
+                seed(costs2_gpu, costs1_gpu,
+                     numpy.int64(v),
+                     apspOptions['dataSize'],
+                     apspOptions['maxThreads'],
+                     grid=apspOptions['grid'],
+                     block=apspOptions['block'])
+                prefill -=1
+        if prefill > 0:
+            for m in random.sample(Matrix,min(len(Matrix),prefill)):
+                drv.memcpy_htod(costs2_gpu, m)
+                seed(costs2_gpu, costs1_gpu,
+                     numpy.int64(v),
+                     apspOptions['dataSize'],
+                     apspOptions['maxThreads'],
+                     grid=apspOptions['grid'],
+                     block=apspOptions['block'])
+        
         
         #iteratively expand the shortest paths (1 iter per kernel run) until we have all the paths
-        for i in xrange(last-5):
+        for i in xrange(last-2):
             #use 2 kernels copying back and forth between cost matrices to ensure no sync issues
-            kernel( refs_gpu,
-                    dists_gpu,
-                    costs1_gpu,
-                    costs2_gpu,
-                    changed_gpu,
-                    apspOptions['dataSize'],
-                    apspOptions['k'],
-                    apspOptions['eps'],
+            kernel( refs_gpu, dists_gpu,
+                    costs1_gpu, costs2_gpu,
+                    changed_gpu, apspOptions['dataSize'],
+                    apspOptions['k'], apspOptions['eps'],
+                    apspOptions['maxThreads'], 
+                    grid=apspOptions['grid'],
+                    block=apspOptions['block'])
+            kernel( refs_gpu, dists_gpu,
+                    costs2_gpu, costs1_gpu,
+                    changed_gpu, apspOptions['dataSize'],
+                    apspOptions['k'], apspOptions['eps'],
                     apspOptions['maxThreads'],
                     grid=apspOptions['grid'],
                     block=apspOptions['block'])
-            kernel( refs_gpu,
-                    dists_gpu,
-                    costs2_gpu,
-                    costs1_gpu,
-                    changed_gpu,
-                    apspOptions['dataSize'],
-                    apspOptions['k'],
-                    apspOptions['eps'],
-                    apspOptions['maxThreads'],
-                    grid=apspOptions['grid'],
-                    block=apspOptions['block'])
-        l = last-5
+        l = last-12
         
         #XXX: is this the best way to pass a flag back?
         cval = 1
         changed[0] = 0
         drv.memcpy_htod(changed_gpu, changed)
         while cval != 0 or l > 1000:
-            kernel( refs_gpu,
-                    dists_gpu,
-                    costs1_gpu,
-                    costs2_gpu,
-                    changed_gpu,
-                    apspOptions['dataSize'],
-                    apspOptions['k'],
-                    apspOptions['eps'],
-                    apspOptions['maxThreads'],
+            kernel( refs_gpu, dists_gpu,
+                    costs1_gpu, costs2_gpu,
+                    changed_gpu, apspOptions['dataSize'],
+                    apspOptions['k'], apspOptions['eps'],
+                    apspOptions['maxThreads'], 
                     grid=apspOptions['grid'],
                     block=apspOptions['block'])
-            kernel( refs_gpu,
-                    dists_gpu,
-                    costs2_gpu,
-                    costs1_gpu,
-                    changed_gpu,
-                    apspOptions['dataSize'],
-                    apspOptions['k'],
-                    apspOptions['eps'],
+            kernel( refs_gpu, dists_gpu,
+                    costs2_gpu, costs1_gpu,
+                    changed_gpu, apspOptions['dataSize'],
+                    apspOptions['k'], apspOptions['eps'],
                     apspOptions['maxThreads'],
                     grid=apspOptions['grid'],
                     block=apspOptions['block'])
@@ -177,37 +183,8 @@ def APSP(knn_refs,knn_dists,eps):
             
         last = max(l,1)
         
-        """
-        #since our termination criterion is heuristic, do a few extra iterations in case we missed the shortest paths
-        for i in xrange(30):
-            kernel( refs_gpu,
-                    dists_gpu,
-                    costs1_gpu,
-                    costs2_gpu,
-                    apspOptions['dataSize'],
-                    apspOptions['k'],
-                    apspOptions['eps'],
-                    apspOptions['maxThreads'],
-                    grid=apspOptions['grid'],
-                    block=apspOptions['block'])
-            kernel( refs_gpu,
-                    dists_gpu,
-                    costs2_gpu,
-                    costs1_gpu,
-                    apspOptions['dataSize'],
-                    apspOptions['k'],
-                    apspOptions['eps'],
-                    apspOptions['maxThreads'],
-                    grid=apspOptions['grid'],
-                    block=apspOptions['block'])
-        """
         #copy costs back into memory
         drv.memcpy_dtoh(Costs, costs1_gpu)
-        """
-        #copy our paths to the diagonally reflected side of the matrix, to guarantee symmetry
-        for n in xrange(v):
-            Matrix[n][v] = Costs[n]
-        """
         
         #add the row to the matrix
         Matrix.append(Costs)

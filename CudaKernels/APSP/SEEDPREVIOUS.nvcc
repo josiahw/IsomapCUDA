@@ -19,9 +19,7 @@
 * thread per vertex, all in parallel. This should scale well to high end GPUs. 
 * Implementation adapted from the paper 'Accelerating Large Graph Algorithms on the GPU Using CUDA'
 *
-* @param Edges The symmetric indices for graph edges in the KNN graph
-* @param Weights The weights for graph edges in the KNN graph
-* @param Costs The geodesic graph distance to each vertex from the selected one.
+* @param Costs The geodesic graph distance to each vertex from the one specified by CostIndex.
 * @param Paths The updated geodesic graph distance to each vertex from the selected one.
 * @param dataSize The total number of data elements we are processing (for bounds checking)
 * @param kMax The number of nodes to include in our K nearest
@@ -32,41 +30,18 @@
 */
 #define MAXBLOCKS 65536 //this will probably never get used, but in the event that we are over 10 million objects it helps.
 
-__global__ void SSSP(const unsigned int* Edges, 
-                     const float* Weights, 
-                     const float* Costs, 
-                     float* Paths,
-                     unsigned int* AnyChange,
-                     const long dataSize,
-                     const long kMax,
-                     const float epsilon,
-                     const long maxThreads) {
+__global__ void SEEDPREVIOUS(const float* Costs, 
+                             float* Paths,
+                             const long dataSize,
+                             const long MyIndex,
+                             const long maxThreads) {
     
     //calculate our vertex position
     const unsigned int vertex = threadIdx.x+blockIdx.x*maxThreads+blockIdx.y*maxThreads*MAXBLOCKS;
     
     //check the thread is inside the dataset
     if (vertex < dataSize) {
-        
-        //cache our initial cost changes locally
-        float p = Costs[vertex];
-        bool Changed = false;
-        
-        //for all neighbours, check whether distance to neighbour + edge weight < initial cost, and if so replace
-        for(unsigned int i = 0; Weights[vertex*kMax+i] < epsilon and i < kMax; ++i) {
-            const unsigned int neighbourid = vertex*kMax+i;
-            const float d = (Costs[Edges[neighbourid]]+Weights[neighbourid]);
-            if (d < p) {
-                p = d;
-                Changed = true;
-            }
-        }
-        
-        //save back into memory
-        if (Changed) {
-            AnyChange[0] = 1;
-        }
-        Paths[vertex] = p;
+        Paths[vertex] = min(Paths[vertex],Costs[vertex]+Costs[MyIndex]);
     }
 }
 
