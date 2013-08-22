@@ -38,7 +38,7 @@ __global__ void NMDS(const unsigned int* Rank, const float* distChunk, const flo
         if (Rank[pos] >= offset and Rank[pos] < limit2) {
             const unsigned int pos2 = Rank[pos]*DATA_DIMS;
             for (unsigned int j = 0; j < DATA_DIMS; ++j) {
-                Deltas[pos2+j] -= distChunk[i]*(Coords[pos2+j]-Coords[Rank[pos+1]*DATA_DIMS+j]); //distChunk[i]*(Coords[pos2+j]-Coords[Rank[pos+1]*DATA_DIMS+j]);
+                Deltas[pos2+j] -=distChunk[i]*(Coords[pos2+j]-Coords[Rank[pos+1]*DATA_DIMS+j]); //distChunk[i]*(Coords[pos2+j]-Coords[Rank[pos+1]*DATA_DIMS+j]);
             }
         } else if (Rank[pos+1] >= offset and Rank[pos+1] < limit2) {
             const unsigned int pos2 = Rank[pos+1]*DATA_DIMS;

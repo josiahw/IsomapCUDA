@@ -70,7 +70,7 @@ ys = np.array(y) #/2000.0
 zs = np.array(z) #/2000.0
 
 
-f = [(float(l.strip(' \r\n').split(',')[0])**2+float(l.strip(' \r\n').split(',')[0])**2)**0.5 for l in open('swissroll.csv').readlines()]
+f = [(float(l.strip(' \r\n').split(',')[1])**2+float(l.strip(' \r\n').split(',')[0])**2)**0.5 for l in open('swissroll.csv').readlines()]
 #f = range(len(x))
 d = (max(f)-min(f))*1.0+0.00000000001
 #print f
@@ -84,7 +84,7 @@ cs = np.array(f) #np.array([0.]*333+[0.25]*235+[0.5]*281+[0.75]*209) #range(len(
 print len(cs),len(zs)
 #ax.scatter(xs, ys,c=cs,s=20,cmap=matplotlib.cm.hot)
 
-ax.scatter(xs, ys, zs, c=cs,s=20,cmap=matplotlib.cm.hot) #cmap=matplotlib.cm.hot)
+ax.scatter(xs, ys, zs, c=cs,s=20,cmap=matplotlib.cm.hsv) #cmap=matplotlib.cm.hot)
 ax.view_init(70,-130)
 ax.set_xlabel('X')
 ax.set_ylabel('Y')

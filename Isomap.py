@@ -22,18 +22,13 @@ import getopt,sys
 
 GPU_MEM_SIZE = 512
 
-def Isomap(dataSet,srcDims,trgDims,k,eps=1000000000., saveSteps = False):
+def Isomap(dataSet,outfile,srcDims,trgDims,k,eps=1000000000., saveSteps = False):
     """
     Classical isomap
     """
     
     #first do KNN
-    kconfig = KNNConfig(dataSet,k,eps,GPU_MEM_SIZE)
-    kconfig['sourceDims'] = min(srcDims,kconfig['sourceDims'])
-    knnList = KNN(dataSet,kconfig)
-    #knnList = simpleKNN(dataSet,k,eps)
-    
-    
+    knnList = KNN(dataSet,k,eps,srcDims)
     
     #then do APSP
     aconfig = APSPConfig(knnList,eps,GPU_MEM_SIZE)
@@ -42,9 +37,8 @@ def Isomap(dataSet,srcDims,trgDims,k,eps=1000000000., saveSteps = False):
     
     #XXX:hacky way of saving this info
     if saveSteps:
-        saveTable(pathMatrix,'distances.csv')
+        saveTable(pathMatrix,outfile[:-4]+'_distances.csv')
     
-    """
     #then normalize the matrix
     nconfig = NormMatrixConfig(pathMatrix,GPU_MEM_SIZE)
     normMatrix = NormMatrix(pathMatrix,nconfig)
@@ -53,7 +47,26 @@ def Isomap(dataSet,srcDims,trgDims,k,eps=1000000000., saveSteps = False):
     #then get eigenvalues
     embedding = EigenEmbedding(normMatrix,trgDims)
     del normMatrix
+    
+    return embedding
+
+
+def NMIsomap(dataSet,outfile,srcDims,trgDims,k,eps=1000000000., saveSteps = False):
     """
+    Non-Metric Isomap
+    """
+    
+    #first do KNN
+    knnList = KNN(dataSet,k,eps,srcDims)
+    
+    #then do APSP
+    aconfig = APSPConfig(knnList,eps,GPU_MEM_SIZE)
+    pathMatrix = APSP(knnList,aconfig)
+    del knnList
+    
+    #XXX:hacky way of saving this info
+    if saveSteps:
+        saveTable(pathMatrix,outfile[:-4]+'_distances.csv')
     
     #then get the rank matrix
     origDims = len(pathMatrix)
@@ -63,11 +76,9 @@ def Isomap(dataSet,srcDims,trgDims,k,eps=1000000000., saveSteps = False):
     #then get the NMDS embedding
     nconfig = NMDSConfig(rankMatrix,trgDims)
     nconfig['sourceDims'] = origDims
-    embedding = CPUNMDS1(rankMatrix, loadMatrix(dataSet),nconfig)
+    embedding = NMDS(rankMatrix, loadMatrix(dataSet),nconfig)
     
     return embedding
-
-
 
 
 
@@ -113,7 +124,7 @@ if __name__ == '__main__':
             print "\t--nonmetric\tEnables non-metric MDS embeddings"
     result = None
     if not nonmetric:
-        result = Isomap(infile,srcDims,trgDims,k,eps)
+        result = Isomap(infile,outfile,srcDims,trgDims,k,eps,True)
     
     
     saveTable(result,outfile)
