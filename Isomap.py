@@ -28,12 +28,12 @@ def Isomap(dataSet,outfile,srcDims,trgDims,k,eps=1000000000., saveSteps = False)
     """
     
     #first do KNN
-    knnList = KNN(dataSet,k,eps,srcDims)
+    knnRefs,knnDists = loadSplitTable(KNN(dataSet,k,eps,srcDims))
     
     #then do APSP
-    aconfig = APSPConfig(knnList,eps,GPU_MEM_SIZE)
-    pathMatrix = APSP(knnList,aconfig)
-    del knnList
+    pathMatrix = APSP(knnRefs,knnDists,eps)
+    del knnRefs
+    del knnDists
     
     #XXX:hacky way of saving this info
     if saveSteps:
@@ -86,9 +86,9 @@ if __name__ == '__main__':
     arg_values = ['nonmetric=','outdims=','indims=','if=','of=','k=','eps=','help','h']
     optlist, args = getopt.getopt(sys.argv[1:], 'x', arg_values)
     
-    trgDims = 2
+    trgDims = 3
     srcDims = 10000000000
-    k =12
+    k =6
     eps = 1000000000.
     infile='swissroll.csv'
     outfile='embedding.csv'
