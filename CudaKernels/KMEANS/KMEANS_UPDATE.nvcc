@@ -1,0 +1,70 @@
+/* K nearest Neighbours Kernel for large datasets ( backported from the improved version at http://github.com/TrentHouliston/Isomaped )
+####################################################################################################################################################
+#Copyright (c) 2013, Josiah Walker and Trent Houliston
+#All rights reserved.
+#
+#Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+#
+#    Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+#    Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or #other materials provided with the distribution.
+#
+#THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED #WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY #DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS #OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING #NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+####################################################################################################################################################
+*/
+
+/**
+* This kernel calculates the K nearest neighbours for the input matrix by chunking it into individual sections.
+* This allows the GPU to do a KNN on datasets that are larger then the amount of memory on the device. It is to
+* be called by splitting the input data into "Chunks" that fit on the gpu memory, and alternate them until every
+* chunk has been loaded as both source and dest. This results in a complete KNN map for all of the data.
+*
+*
+*
+* @param source Our "Source" chunk of data to do KNN on
+* @param target Our "Target" chunk, the chunk we are comparing distances to
+* @param dimensions The dimensionality of the source/target data
+* @param indices The indexes to the nearest k neighbours (matches with distances)
+* @param distances The distances to our nearest k neighbours (matches with indices)
+* @param kMax The number of nodes to include in our K nearest
+* @param epsilon Our epsilon to limit the distance of KMeans by
+* @param dataSize The total number of data elements we are processing (for bounds checking)
+* @param chunkSize The size of our chunks (for bounds checking)
+* @param sourceOffset The offset from 0 that the real (non chunked) index of our source chunk is
+* @param targetOffset The offset from 0 that the real (non chunked) index of our target chunk is
+* @param maxThreads The number of threads the host CUDA version supports
+*
+* @author Josiah Walker
+* @author Trent Houliston
+*/
+#define MAXBLOCKS 65536 //this will probably never get used, but in the event that we are over 10 million objects it helps.
+
+__global__ void KMEANS_UPDATE(float* kPoints,
+                    const float* target,
+                    const long dimensions,
+                    const unsigned int* tLabels,
+                    const long kMax,
+                    const long dataSize, //use longs instead of uints because numpy doesn't support single value uint32
+                    const long chunkSize,
+                    const long kOffset,
+                    const long dataOffset,
+                    const long maxThreads) { //max threads is different per version of CUDA
+
+    // Get the source element indices
+    const size_t elementIndex = (threadIdx.x+blockIdx.x*maxThreads+blockIdx.y*maxThreads*MAXBLOCKS);
+    const unsigned int elementLabel = elementIndex+kOffset;
+    const unsigned int dataLimit = min((unsigned int)chunkSize,(unsigned int)(dataSize-dataOffset));
+    const unsigned int kLimit = min((unsigned int)chunkSize,(unsigned int)(kMax-kOffset));
+    
+    if (elementIndex < kLimit) { //check data limits
+        for (unsigned int j = 0; j < dimensions; ++j) { //sum the distance
+            double d = 0.; //use double for higher accuracy on large sums
+            double count = 0.00000000001;
+            for (unsigned int i = 0; i < dataLimit; ++i) {
+                const double increment = (tLabels[i] == elementLabel); //go branchless!
+                d += increment*target[i*dimensions+j];
+                count += increment;
+            }
+            kPoints[elementIndex*dimensions+j] += d/count; //assign the new centroid in this dimension to be the average of all points in its label
+        }
+    }
+}
