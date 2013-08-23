@@ -22,7 +22,7 @@ def dataConfig(dataTable,settings = {}):
     """
     if type( "" ) == type( dataTable ):
         fi = open(dataTable)
-        l = [float(p) for p in fi.readline().strip('\n ').split(',')]
+        l = fi.readline().strip('\n ').split(',')
         fi.close()
         settings["sourceDims"] = len(l)
         fi = open(dataTable)
@@ -89,11 +89,12 @@ def loadMatrix(dataTable):
     """
     results = []
     if type( "" ) == type( dataTable ):
-        f = open(dataTable)
-        l = f.readlines()
-        f.close()
-        for v in l:
-            results.append(array([float(p) for p in v.strip('\r\n ').split(',')]).flatten().astype(numpy.float32))
+        results = numpy.loadtxt(dataTable,delimiter=',').astype(numpy.float32)
+        #f = open(dataTable)
+        #l = f.readlines()
+        #f.close()
+        #for v in l:
+        #    results.append(array([float(p) for p in v.strip('\r\n ').split(',')]).flatten().astype(numpy.float32))
     else:
         results = array(dataTable).astype(numpy.float32)
     return results
@@ -104,11 +105,12 @@ def loadIntMatrix(dataTable):
     """
     results = []
     if type( "" ) == type( dataTable ):
-        f = open(dataTable)
-        l = f.readlines()
-        f.close()
-        for v in l:
-            results.append(array([float(p) for p in v.strip('\r\n ').split(',')]).flatten().astype(numpy.uint32))
+        results = numpy.loadtxt(dataTable,delimiter=',').astype(numpy.uint32)
+        #f = open(dataTable)
+        #l = f.readlines()
+        #f.close()
+        #for v in l:
+        #    results.append(array([float(p) for p in v.strip('\r\n ').split(',')]).flatten().astype(numpy.uint32))
     else:
         results = array(dataTable).astype(numpy.uint32)
     return results
