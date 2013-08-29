@@ -28,6 +28,7 @@ import random
 from DataUtils import dataConfig,loadTable,loadSplitTable,loadMatrix,loadIntMatrix,saveTable
 from KNearestNeighbours import KNN
 from NonMetricMultiDimensionalScaling import NMDS
+from QuicSVD import QSVD
 
 # APSP Algorithm ---------------------------------------------------
 KernelLocation = "CudaKernels/APSP/"
@@ -126,6 +127,7 @@ def APSP(knn_refs,knn_dists,eps):
                      grid=apspOptions['grid'],
                      block=apspOptions['block'])
                 prefill -=1
+        #comment out for benchmarking due to non deterministic speedup
         if prefill > 0:
             for m in random.sample(Matrix,min(len(Matrix),prefill)):
                 drv.memcpy_htod(costs2_gpu, m)
@@ -313,5 +315,5 @@ def RankMatrix(dataTable):
     result.sort()
     print time.time()-t0, " seconds to compute Rank Matrix."
     
-    return array(result)[:,1:].astype(numpy.uint32) #,array(result)[:,:1].astype(numpy.float32)
+    return numpy.array(result)[:,1:].astype(numpy.uint32) #,array(result)[:,:1].astype(numpy.float32)
 
