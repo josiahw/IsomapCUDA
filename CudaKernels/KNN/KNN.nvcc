@@ -77,9 +77,7 @@ __global__ void KNN(const float* source,
 
 
             // Check if we are one of the K nearest (the nearest neighbours are sorted)
-            if (distance <= distances[sourceAddress + kMax - 1]
-                // Check we are not greater then epsilon
-                && distance < epsilon
+            if (distance < distances[sourceAddress + kMax - 1]
                 // Check we are not looking at ourself
                 && (targetOffset + i) != (elementIndex + sourceOffset)) {
 
