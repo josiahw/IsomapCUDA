@@ -246,7 +246,7 @@ def QSVD(dataTable,dims=3, k = -1, delta=0.00001, initialBasis=[]):
     X = numpy.dot(numpy.dot(basisMatrix[:basisSize],dataTable),basisMatrix[:basisSize].T)
     e,v = eig(X)
     v = v.real
-    e = 1./e.real
+    e = abs(e.real)**0.5
     
     out = (e*numpy.dot(basisMatrix[:basisSize].T,v)).T
     
