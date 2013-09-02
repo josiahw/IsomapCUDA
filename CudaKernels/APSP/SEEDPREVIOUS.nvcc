@@ -32,8 +32,8 @@
 
 __global__ void SEEDPREVIOUS(const float* Costs, 
                              float* Paths,
-                             const long dataSize,
                              const long MyIndex,
+                             const long dataSize,
                              const long maxThreads) {
     
     //calculate our vertex position
