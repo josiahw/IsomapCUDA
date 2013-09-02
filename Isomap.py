@@ -46,6 +46,7 @@ def Isomap(dataSet,outfile,srcDims,trgDims,k,eps=1000000000., saveSteps = False)
     
     #then get eigenvalues
     embedding = EigenEmbedding(normMatrix,trgDims)
+    #embedding = QSVD(normMatrix,trgDims)
     del normMatrix
     
     return embedding
@@ -88,7 +89,7 @@ if __name__ == '__main__':
     
     trgDims = 3
     srcDims = 10000000000
-    k =7
+    k =6
     eps = 1000000000.
     infile='swissroll.csv'
     outfile='embedding.csv'
@@ -124,7 +125,7 @@ if __name__ == '__main__':
             print "\t--nonmetric\tEnables non-metric MDS embeddings"
     result = None
     if not nonmetric:
-        result = Isomap(infile,outfile,srcDims,trgDims,k,eps,True)
+        result = Isomap(infile,outfile,srcDims,trgDims,k,eps,False)
     
     
     saveTable(result,outfile)
