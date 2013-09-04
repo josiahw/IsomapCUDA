@@ -75,6 +75,17 @@ def APSP(knn_refs,knn_dists,eps):
     seedprev = SourceModule(open(KernelLocation+"SEEDPREVIOUS.nvcc").read())
     seed = seedprev.get_function("SEEDPREVIOUS")
     
+    #apparently this can make things faster
+    kernel.prepare([numpy.intp,
+                    numpy.intp,
+                    numpy.intp,
+                    numpy.intp,
+                    numpy.intp,
+                    numpy.int64,
+                    numpy.int64,
+                    numpy.float32,
+                    numpy.int64])
+    
     #create our template cost list
     Costs0 = array([apspOptions['eps']]*apspOptions['dataLength']).astype(numpy.float32)
     Matrix = []
@@ -115,7 +126,7 @@ def APSP(knn_refs,knn_dists,eps):
         
         #pre-populate the costs with entries we've already solved
         #XXX: 10 is a hack, should be the degree of the vertex
-        prefill = min(len(Matrix),10)
+        prefill = min(len(Matrix),30)
         for i in xrange(len(knn_refs[v])):
             s = knn_refs[v][i]
             if s < v and knn_dists[v][i] < apspOptions['eps']:
@@ -142,41 +153,41 @@ def APSP(knn_refs,knn_dists,eps):
         #iteratively expand the shortest paths (1 iter per kernel run) until we have all the paths
         for i in xrange(last-2):
             #use 2 kernels copying back and forth between cost matrices to ensure no sync issues
-            kernel( refs_gpu, dists_gpu,
+            kernel.prepared_call(
+                    apspOptions['grid'],
+                    apspOptions['block'], refs_gpu, dists_gpu,
                     costs1_gpu, costs2_gpu,
                     changed_gpu, apspOptions['dataSize'],
                     apspOptions['k'], apspOptions['eps'],
-                    apspOptions['maxThreads'], 
-                    grid=apspOptions['grid'],
-                    block=apspOptions['block'])
-            kernel( refs_gpu, dists_gpu,
+                    apspOptions['maxThreads'] )
+            kernel.prepared_call(
+                    apspOptions['grid'],
+                    apspOptions['block'], refs_gpu, dists_gpu,
                     costs2_gpu, costs1_gpu,
                     changed_gpu, apspOptions['dataSize'],
                     apspOptions['k'], apspOptions['eps'],
-                    apspOptions['maxThreads'],
-                    grid=apspOptions['grid'],
-                    block=apspOptions['block'])
+                    apspOptions['maxThreads'],)
         l = last-12
         
         #XXX: is this the best way to pass a flag back?
         cval = 1
         changed[0] = 0
         drv.memcpy_htod(changed_gpu, changed)
-        while cval != 0 or l > 1000:
-            kernel( refs_gpu, dists_gpu,
+        while cval != 0 or l > 5000:
+            kernel.prepared_call(
+                    apspOptions['grid'],
+                    apspOptions['block'], refs_gpu, dists_gpu,
                     costs1_gpu, costs2_gpu,
                     changed_gpu, apspOptions['dataSize'],
                     apspOptions['k'], apspOptions['eps'],
-                    apspOptions['maxThreads'], 
-                    grid=apspOptions['grid'],
-                    block=apspOptions['block'])
-            kernel( refs_gpu, dists_gpu,
+                    apspOptions['maxThreads'], )
+            kernel.prepared_call( 
+                    apspOptions['grid'],
+                    apspOptions['block'],refs_gpu, dists_gpu,
                     costs2_gpu, costs1_gpu,
                     changed_gpu, apspOptions['dataSize'],
                     apspOptions['k'], apspOptions['eps'],
-                    apspOptions['maxThreads'],
-                    grid=apspOptions['grid'],
-                    block=apspOptions['block'])
+                    apspOptions['maxThreads'],)
             l += 1
             drv.memcpy_dtoh(changed, changed_gpu)
             cval = changed[0]
