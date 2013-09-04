@@ -19,6 +19,7 @@ import random
 from numpy.linalg import svd,eig
 import pycuda.autoinit
 import pycuda.driver as drv
+import pycuda.gpuarray as gpuarray
 from pycuda.compiler import SourceModule
 import math
 
@@ -46,7 +47,7 @@ def QSVDConfig(dataTable, dims, k = -1, eps = 0.00001,gpuMemSize = 512, settings
     
     settings["k"] = k
     if k < 0:
-        settings["k"] = settings["dataLength"]/50
+        settings["k"] = settings["dataLength"]/125
     settings["delta"] = eps
     settings["targetDims"] = dims
     
@@ -57,17 +58,15 @@ def _calcRLS(dataMatrix,basisMatrix,basisSize,dataErrors):
     """
     Calculate the length squared orthonormalized error for all basis labels
     """
+    
+    #this calculates a slightly inaccurate residual of the orthonormal basis decomposition for all datapoints
+    db = numpy.dot(dataMatrix,basisMatrix[:basisSize].T)
+    
     for i in xrange(len(dataMatrix)):
         d = dataMatrix[i].copy()
-        for b in basisMatrix[:basisSize]:
-            d -= numpy.dot(d,b)*b
-        dataErrors[i] = numpy.dot(d,d)
-
-def _fnorm2(basisMatrix,basisSize):
-    """
-    Calculates the frobenius norm squared
-    """
-    return sum(sum(basisMatrix[:basisSize]*basisMatrix[:basisSize]))
+        for j in xrange(basisSize):
+            d -= basisMatrix[j]*db[i][j]
+        dataErrors[i] = numpy.dot(d,d)**0.5
 
 def _residual(dataVector,basisMatrix,basisSize,exclude=-1):
     """
@@ -79,11 +78,11 @@ def _residual(dataVector,basisMatrix,basisSize,exclude=-1):
             d -= numpy.dot(d,basisMatrix[i])*basisMatrix[i]
     return d
 
-def QSVD(dataTable,dims=3, k = -1, delta=0.00001, initialBasis=[]):
+def QSVD(dataTable,dims=3, k = -1, delta=0.00000002, initialBasis=[]):
     splitmax = 1
     
     qConfig = QSVDConfig(dataTable,dims,k,delta)
-    
+    t0 = time.time()
     
     basisMatrix = numpy.zeros((qConfig["k"]+splitmax,qConfig["sourceDims"])).astype(numpy.float32)
     dataLabels = numpy.zeros(qConfig["dataLength"]).astype(numpy.uint32)
@@ -102,15 +101,15 @@ def QSVD(dataTable,dims=3, k = -1, delta=0.00001, initialBasis=[]):
         else:
             newBasis = nb2
         #"""
-        #ewBasis += dataTable[i]
+        #newBasis += dataTable[i]
     basisMatrix[0] = newBasis/numpy.sqrt(numpy.dot(newBasis,newBasis))
+    labelData = [range(len(dataTable))]
     
+    fnormData = sum(sum(dataTable*dataTable))**0.5
     
-    fnormData = sum(sum(dataTable*dataTable))
-    
-    RLS = 1.
-    while RLS > delta and basisSize < qConfig["k"]:
-        print basisSize, RLS,RLS/fnormData
+    RLS = fnormData
+    while (RLS/fnormData)**2 > delta and basisSize < qConfig["k"]:
+        #print basisSize, RLS,(RLS/fnormData)**2
         #Step 1: calculate data RLS
         _calcRLS(dataTable,basisMatrix,basisSize,dataErrors)
         
@@ -122,134 +121,87 @@ def QSVD(dataTable,dims=3, k = -1, delta=0.00001, initialBasis=[]):
         #Step 3: sort labels by RLS
         errorQueue = zip(labelErrors[:basisSize],range(basisSize))
         errorQueue.sort()
-        for ii in xrange(min(splitmax,len(errorQueue))):
-            largestLabel = errorQueue[-1][1]
-            errorQueue.pop()
-            
-            #Step 4: split label with largest RLS
-            
-            #4.1: make the split vector
-            leaf = []
-            splitNode = numpy.zeros(qConfig["sourceDims"]).astype(numpy.float64)
-            for i in xrange(qConfig["dataLength"]):
-                if dataLabels[i] == largestLabel:
-                    """
-                    nb = splitNode - dataTable[i]
-                    nb2 = splitNode + dataTable[i]
-                    if numpy.dot(nb,nb) > numpy.dot(nb2,nb2):
-                        splitNode = nb
-                    else:
-                        splitNode = nb2
-                    """
-                    splitNode += dataTable[i]*dataErrors[i] #*numpy.dot(dataTable[i],dataTable[i]) # #get the orthogonal decomposition
-                    leaf.append(i)
-            splitNode = _residual(splitNode,basisMatrix,basisSize,largestLabel)/labelErrors[largestLabel] #get the orthogonal decomposition error
-            splitNode /= numpy.sqrt(numpy.dot(splitNode,splitNode)) + 0.0000000000000001 #normalise
-            
-            #4.2: calculate the cosines
-            cosines = []
-            for l in leaf:
-                cosines.append(numpy.dot(dataTable[l],splitNode)/numpy.dot(dataTable[l],dataTable[l]))
-            
-            #4.3: sort the nodes
-            cmax = max(cosines)
-            cmin = min(cosines)
-            left = []
-            right = []
-            
-            for i in xrange(len(leaf)):
-                if cmax-cosines[i] < cosines[i]-cmin:
-                    left.append(leaf[i])
-                else:
-                    right.append(leaf[i])
-            
-            #4.4: relabel the nodes and increment the basis
-            for r in right:
-                dataLabels[r] = basisSize
+        largestLabel = errorQueue[-1][1]
+        
+        #Step 4: split label with largest RLS
+        
+        #4.1: make the split vector
+        leaf = labelData[largestLabel]
+        splitNode = numpy.zeros(qConfig["sourceDims"]).astype(numpy.float64)
+        for i in labelData[largestLabel]:
+            nb = splitNode - dataTable[i]
+            nb2 = splitNode + dataTable[i]
+            if numpy.dot(nb,nb) > numpy.dot(nb2,nb2):
+                splitNode = nb
+            else:
+                splitNode = nb2
+        splitNode = _residual(splitNode,basisMatrix,basisSize,largestLabel)/labelErrors[largestLabel] #get the orthogonal decomposition error
+        splitNode /= numpy.sqrt(numpy.dot(splitNode,splitNode)) + 0.0000000000000001 #normalise
+        
+        #4.2: calculate the cosines
+        cosines = []
+        for l in leaf:
+            cosines.append(numpy.dot(dataTable[l],splitNode)/numpy.dot(dataTable[l],dataTable[l]))
+        
+        #4.3: sort the nodes
+        cmax = max(cosines)
+        cmin = min(cosines)
+        left = []
+        right = []
+        
+        for i in xrange(len(leaf)):
+            if cmax-cosines[i] < cosines[i]-cmin:
+                left.append(leaf[i])
+            else:
+                right.append(leaf[i])
+        
+        #4.4: relabel the nodes and increment the basis
+        for r in right:
+            dataLabels[r] = basisSize
+        
+        #4.5: recalculate the basis vectors
+        
+        #update left
+        labelData[largestLabel] = left
+        newBasis = numpy.zeros(qConfig["sourceDims"]).astype(numpy.float64)
+        for i in labelData[largestLabel]:
+            nb = newBasis - dataTable[i]
+            nb2 = newBasis + dataTable[i]
+            if numpy.dot(nb,nb) > numpy.dot(nb2,nb2):
+                newBasis = nb
+            else:
+                newBasis = nb2
+        newBasis = _residual(newBasis,basisMatrix,basisSize,largestLabel) #get the orthogonal decomposition error
+        newBasis /= numpy.sqrt(numpy.dot(newBasis,newBasis)) + 0.0000000000000001 #normalise
+        basisMatrix[largestLabel] = newBasis
         
         
+        #update right
+        labelData.append(right)
+        newBasis = numpy.zeros(qConfig["sourceDims"]).astype(numpy.float64)
+        for i in labelData[basisSize]:
+            nb = newBasis - dataTable[i]
+            nb2 = newBasis + dataTable[i]
+            if numpy.dot(nb,nb) > numpy.dot(nb2,nb2):
+                newBasis = nb
+            else:
+                newBasis = nb2
+        newBasis = _residual(newBasis,basisMatrix,basisSize,basisSize) #get the orthogonal decomposition error
+        newBasis /= numpy.sqrt(numpy.dot(newBasis,newBasis)) + 0.0000000000000001 #normalise
+        basisMatrix[basisSize] = newBasis
         
-            #4.5: recalculate the basis vectors
-            
-            #update left
-            newBasis = numpy.zeros(qConfig["sourceDims"]).astype(numpy.float64)
-            for i in xrange(qConfig["dataLength"]):
-                if dataLabels[i] == largestLabel:
-                    #"""
-                    nb = newBasis - dataTable[i]
-                    nb2 = newBasis + dataTable[i]
-                    if numpy.dot(nb,nb) > numpy.dot(nb2,nb2):
-                        newBasis = nb
-                    else:
-                        newBasis = nb2
-                    #"""
-                    #newBasis += dataTable[i] #*dataErrors[i] #get the orthogonal decomposition
-            newBasis = _residual(newBasis,basisMatrix,basisSize,largestLabel) #get the orthogonal decomposition error
-            newBasis /= numpy.sqrt(numpy.dot(newBasis,newBasis)) + 0.0000000000000001 #normalise
-            basisMatrix[largestLabel] = newBasis
-            
-            #update right
-            newBasis = numpy.zeros(qConfig["sourceDims"]).astype(numpy.float64)
-            for i in xrange(qConfig["dataLength"]):
-                if dataLabels[i] == basisSize:
-                    #"""
-                    nb = newBasis - dataTable[i]
-                    nb2 = newBasis + dataTable[i]
-                    if numpy.dot(nb,nb) > numpy.dot(nb2,nb2):
-                        newBasis = nb
-                    else:
-                        newBasis = nb2
-                    #"""
-                    #newBasis += dataTable[i] #*dataErrors[i] #get the orthogonal decomposition
-            newBasis = _residual(newBasis,basisMatrix,basisSize,basisSize) #get the orthogonal decomposition error
-            newBasis /= numpy.sqrt(numpy.dot(newBasis,newBasis)) + 0.0000000000000001 #normalise
-            basisMatrix[basisSize] = newBasis
-            
-            #increment basis
-            basisSize += 1
+        #increment basis
+        basisSize += 1
         
         RLS = sum(labelErrors)/qConfig["dataLength"]
     
-    
-    """
-    #OLD SVD CODE - NOT SURE IF THIS COULD BE FASTER THAN EIGS
-    #basisSize = len(dataTable)-500
-    #Now perform SVD of our subspace basis:
-    X = numpy.dot(dataTable,basisMatrix[:basisSize].T)
-    #u,s,v = svd(numpy.dot(X.T,X))
-    u,s,v = svd(numpy.dot(basisMatrix[:basisSize],X))
-    print X.shape
-    print basisMatrix[:basisSize].shape
-    print u.shape,s.shape,v.shape
-    #print s
-    #s2 = 1./s**0.5
-    
-    
-    #u = numpy.dot(numpy.dot(v,basisMatrix[:basisSize]),dataTable) #we only need u
-    u = numpy.dot(numpy.dot(basisMatrix[:basisSize].T,v.T),v)
-    for i in xrange(len(u)):
-        u[i] /= numpy.dot(u[i],u[i])**0.5 #s2
-    u = numpy.dot(u.T,dataTable)
-    #for i in xrange(len(s)):
-    #    s[i][i] = numpy.sqrt(s[i][i])
-    #v = numpy.dot(basisMatrix[:basisSize].T,v)
-    print u.shape
-    out = []
-    for i in xrange(0,qConfig["targetDims"]):
-        
-        eig = numpy.dot(u[i],dataTable)
-        eig = numpy.dot(eig,u[i]) #/(numpy.dot(u[i],u[i])+0.000000000000001) #calculate eigenvalue
-        #print numpy.dot(u[i],u[i]),eig
-        out.append(eig**0.5*u[i]) #/numpy.dot(u[i],u[i]))
-    print out[0]
-    """
     X = numpy.dot(numpy.dot(basisMatrix[:basisSize],dataTable),basisMatrix[:basisSize].T)
     e,v = eig(X)
-    v = v.real
-    e = abs(e.real)**0.5
+    v = v[:dims].real
+    e = abs(e[:dims].real)**0.5
     
-    out = (e*numpy.dot(basisMatrix[:basisSize].T,v)).T
-    
+    out = (e*numpy.dot(basisMatrix[:basisSize,:dims].T,v)).T[:dims]
+    print time.time()-t0, " seconds to process Eigenvalues"
     
     return out.T
     
