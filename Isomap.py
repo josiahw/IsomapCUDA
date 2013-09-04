@@ -45,8 +45,8 @@ def Isomap(dataSet,outfile,srcDims,trgDims,k,eps=1000000000., saveSteps = False)
     del pathMatrix
     
     #then get eigenvalues
-    embedding = EigenEmbedding(normMatrix,trgDims)
-    #embedding = QSVD(normMatrix,trgDims)
+    #embedding = EigenEmbedding(normMatrix,trgDims)
+    embedding = QSVD(normMatrix,trgDims)
     del normMatrix
     
     return embedding
@@ -112,7 +112,8 @@ if __name__ == '__main__':
         if o[0].strip('-') == 'k':
             k = int(o[1])
     #for o in optlist:
-    #    nonmetric = True
+    #    if o[0].strip('-') == 'nonmetric':
+    #        nonMetric = True
         
     for o in optlist:
         if o[0].strip('-') == 'help' or o[1].strip('-') == 'h':
@@ -126,7 +127,8 @@ if __name__ == '__main__':
     result = None
     if not nonmetric:
         result = Isomap(infile,outfile,srcDims,trgDims,k,eps,False)
-    
+    else:
+        result = NMIsomap(infile,outfile,srcDims,trgDims,k,eps,False)
     
     saveTable(result,outfile)
     
