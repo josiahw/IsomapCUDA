@@ -20,21 +20,22 @@
 //DATA_DIMS
 //memory complexity = 3*4*CHUNK_SIZE + 6*4*TOTAL_THREADS + DATA_DIMS*DATA_SIZE + 8
 
-__global__ void RankDist(const unsigned int* Rank, const float* Coords, float* distChunk, double* threadSums) {
+__global__ void RankDist(const unsigned int* Rank, const float* Coords, float* distChunk, float* threadSums, const long chunkSize, const long dims) {
     double sum = 0.0;
     const unsigned int v = threadIdx.x;
     const unsigned int offset = v*STEP_SIZE;
-    const unsigned int limit = min(STEP_SIZE,max(CHUNK_SIZE-(int)offset,0));
-    for (unsigned int i = 0; i < limit; ++i) {
+    const unsigned int limit = min((v+1)*STEP_SIZE,(unsigned int)chunkSize);
+    for (unsigned int i = offset; i < limit; ++i) {
         //calculate distance
-        unsigned int pos = (i+offset)*2;
+        const unsigned int pos = Rank[i*2]*dims;
+        const unsigned int pos2 = Rank[i*2+1]*dims;
         float d = 0.0;
-        for (unsigned int j = 0; j < DATA_DIMS; ++j) {
-            d += (Coords[Rank[pos]*DATA_DIMS+j]-Coords[Rank[pos+1]*DATA_DIMS+j])*
-                 (Coords[Rank[pos]*DATA_DIMS+j]-Coords[Rank[pos+1]*DATA_DIMS+j]);
+        for (unsigned int j = 0; j < dims; ++j) {
+            d += (Coords[pos+j]-Coords[pos2+j])*
+                 (Coords[pos+j]-Coords[pos2+j]);
         }
-        sum += distChunk[i+offset] = sqrt(d);
+        sum += distChunk[i] = sqrt(d);
     }
     //have a separate sum vector so we can normalize easily
-    threadSums[v] = (sum/DATA_LENGTH);
+    threadSums[v] += (sum/DATA_LENGTH);
 }

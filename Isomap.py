@@ -58,12 +58,12 @@ def NMIsomap(dataSet,outfile,srcDims,trgDims,k,eps=1000000000., saveSteps = Fals
     """
     
     #first do KNN
-    knnList = KNN(dataSet,k,eps,srcDims)
+    knnRefs,knnDists = loadSplitTable(KNN(dataSet,k,eps,srcDims))
     
     #then do APSP
-    aconfig = APSPConfig(knnList,eps,GPU_MEM_SIZE)
-    pathMatrix = APSP(knnList,aconfig)
-    del knnList
+    pathMatrix = APSP(knnRefs,knnDists,eps)
+    del knnRefs
+    del knnDists
     
     #XXX:hacky way of saving this info
     if saveSteps:
@@ -75,9 +75,7 @@ def NMIsomap(dataSet,outfile,srcDims,trgDims,k,eps=1000000000., saveSteps = Fals
     del pathMatrix
     
     #then get the NMDS embedding
-    nconfig = NMDSConfig(rankMatrix,trgDims)
-    nconfig['sourceDims'] = origDims
-    embedding = NMDS(rankMatrix, loadMatrix(dataSet),nconfig)
+    embedding = NMDS(rankMatrix, loadMatrix(dataSet)[:,:trgDims], origDims, trgDims)
     
     return embedding
 
@@ -111,9 +109,10 @@ if __name__ == '__main__':
     for o in optlist:
         if o[0].strip('-') == 'k':
             k = int(o[1])
-    #for o in optlist:
-    #    if o[0].strip('-') == 'nonmetric':
-    #        nonMetric = True
+    for o in optlist:
+        if o[0].strip('-') == 'nonmetric':
+            if o[1].strip(' \r\n\t') == 'True' or o[1].strip(' \r\n\t') == 'true':
+                nonmetric = True
         
     for o in optlist:
         if o[0].strip('-') == 'help' or o[1].strip('-') == 'h':

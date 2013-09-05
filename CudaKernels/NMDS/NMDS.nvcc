@@ -13,37 +13,27 @@
 */
 
 //GPU implementation of NMDS update rule (using scaled isotonic differences)
-//requires the following defines: 
-//CHUNK_SIZE
-//TOTAL_THREADS
-//STEP_SIZE (ie ceil(CHUNK_SIZE/TOTAL_THREADS))
-//DATA_STEP_SIZE (ie ceil(DATA_SIZE/TOTAL_THREADS))
-//DATA_DIMS
-//DATA_SIZE
-//memory complexity = 3*4*CHUNK_SIZE + 6*4*TOTAL_THREADS + 2*DATA_DIMS*DATA_SIZE + 8
 
-__global__ void NMDS(const unsigned int* Rank, const float* distChunk, const float* Coords, float* Deltas) { //, const long global_offset) {
-    const unsigned int v = threadIdx.x;
-    
-    const unsigned int offset = v*DATA_STEP_SIZE;
-    const unsigned int limit2 = min(DATA_STEP_SIZE+offset,DATA_SIZE);
-    
-    //1: copy data
-    for (unsigned int i = offset*DATA_DIMS; i < (limit2+1)*DATA_DIMS; ++i) {
-        Deltas[i] = Coords[i];
-    }
-    //2: apply updates
-    for (unsigned int i = 0; i < CHUNK_SIZE; ++i) {
-        const unsigned int pos = 2*i;
-        if (Rank[pos] >= offset and Rank[pos] < limit2) {
-            const unsigned int pos2 = Rank[pos]*DATA_DIMS;
-            for (unsigned int j = 0; j < DATA_DIMS; ++j) {
-                Deltas[pos2+j] -=distChunk[i]*(Coords[pos2+j]-Coords[Rank[pos+1]*DATA_DIMS+j]); //distChunk[i]*(Coords[pos2+j]-Coords[Rank[pos+1]*DATA_DIMS+j]);
+__global__ void NMDS(const unsigned int* Rank, const float* distChunk, float* Deltas, 
+                     const unsigned int* reorderedPts, const unsigned int* startPts, 
+                     const long chunkSize, const long dims, const long dataSize, const float scale, const float rescale) { //, const long global_offset) {
+    const unsigned int v = threadIdx.x+blockIdx.x*1024+blockIdx.y*1024*65536;
+    const unsigned int v2 = v+dataSize;
+    if (v < dataSize) {
+        for (unsigned int i = startPts[v]; i < startPts[v+1]; ++i) {
+            const unsigned int pos = Rank[reorderedPts[i]*2]*dims;
+            const unsigned int pos2 = Rank[reorderedPts[i]*2+1]*dims;
+            const float scaled = scale*(1.-rescale*distChunk[reorderedPts[i]]);
+            for (unsigned int j = 0; j < dims; ++j) {
+                Deltas[pos+j] -= scaled*(Deltas[pos+j]-Deltas[pos2+j]);
             }
-        } else if (Rank[pos+1] >= offset and Rank[pos+1] < limit2) {
-            const unsigned int pos2 = Rank[pos+1]*DATA_DIMS;
-            for (unsigned int j = 0; j < DATA_DIMS; ++j) {
-                Deltas[pos2+j] += distChunk[i]*(Coords[Rank[pos]*DATA_DIMS+j]-Coords[pos2+j]);
+        }
+        for (unsigned int i = startPts[v2]; i < startPts[v2+1]; ++i) {
+            const unsigned int pos = Rank[reorderedPts[i]*2]*dims;
+            const unsigned int pos2 = Rank[reorderedPts[i]*2+1]*dims;
+            const float scaled = scale*(1.-rescale*distChunk[reorderedPts[i]]);
+            for (unsigned int j = 0; j < dims; ++j) {
+                Deltas[pos2+j] += scaled*(Deltas[pos+j]-Deltas[pos2+j]);
             }
         }
     }
