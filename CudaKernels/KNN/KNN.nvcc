@@ -57,34 +57,36 @@ __global__ void KNN(const float* source,
     const unsigned int offset = elementIndex*kMax;
     
     //make local memory arrays
-    double distances[CHUNKSIZE];
+    float distances[CHUNKSIZE];
     float knnD[MAXKMAX];
     unsigned int knnI[MAXKMAX];
     if (elementIndex < sourceLimit) {
-        const double s0 = source[elementIndex];
-        for (unsigned int i = 0; i < targetLimit; ++i) { //clear the local memory, replacing with our first values so we don't waste ops
-            const double value = target[i] - s0;
-            distances[i] = value*value;
-        }
-        
-        for (unsigned int j = 1; j < dimensions; ++j) { //add up all the dot products column by column
-            const double s = source[elementIndex + j*sourceLimit];
-            for (unsigned int i = 0; i < targetLimit; i++) {
-                const double value = target[i  + j*targetLimit] - s;
-                distances[i] += value * value;
-            }
-        }
         
         for (unsigned int i = 0; i < kMax; ++i) { //Prefill the KNN heap from main memory
             knnD[i] = knn[offset + i];
             knnI[i] = indices[offset + i];
         }
         
+        const float s0 = source[elementIndex];
+        for (unsigned int i = 0; i < targetLimit; ++i) { //clear the local memory, replacing with our first values so we don't waste ops
+            const float value = target[i] - s0;
+            distances[i] = value*value;
+        }
+        
+        for (unsigned int j = 1; j < dimensions; ++j) { //add up all the dot products column by column
+            const float s = source[elementIndex + j*sourceLimit];
+            for (unsigned int i = 0; i < targetLimit; i++) {
+                const float value = target[i  + j*targetLimit] - s;
+                distances[i] += value * value;
+            }
+        }
+        
+        
         //use a binary maxheap to insert new neighbours
         for (unsigned int i = 0; i < targetLimit; ++i) {
             //get the next distance
             const float d = sqrt(distances[i]);
-            unsigned int index = 0 + (d < knnD[0]); //if d < root, move to the next node to check
+            unsigned int index = (d < knnD[0]); //if d < root, move to the next node to check
             while (index < kMax and (knnD[index] > d or knnD[index+1] > d)) { //walk the bheap
                 
                 //get the index of the new largest leaf
@@ -103,7 +105,7 @@ __global__ void KNN(const float* source,
             }
         }
         
-        for (unsigned int i = 0; i < kMax; ++i) { //copy out to main memory
+        for (unsigned int i = 0; i < kMax; i++) { //copy out to main memory
             knn[offset + i] = knnD[i];
             indices[offset + i] = knnI[i];
         }

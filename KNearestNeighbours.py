@@ -99,10 +99,11 @@ def KNN(dataTable, k, epsilon=10000000000000., srcDims = 1000000000000000, normD
     #calculate KNN
     offset = 0
     source_gpu = drv.mem_alloc(data[0].nbytes)
+    target_gpu = drv.mem_alloc(data[0].nbytes)
     indices_gpu = drv.mem_alloc(indices[0].nbytes)
     dists_gpu = drv.mem_alloc(dists[0].nbytes)
     
-    data = [s.T for s in data]
+    data = [s.T.flatten() for s in data]
     print data[0].shape,knnOptions['dataSize'],knnOptions['chunkSize']
     print knnOptions['chunkSize']
     for source in data:
@@ -110,8 +111,9 @@ def KNN(dataTable, k, epsilon=10000000000000., srcDims = 1000000000000000, normD
         drv.memcpy_htod(indices_gpu, indices[offset])
         drv.memcpy_htod(dists_gpu, dists[offset])
         for t in xrange(len(data)):
+            drv.memcpy_htod(target_gpu, data[t])
             prg(source_gpu,
-                drv.In(data[t]),
+                target_gpu,
                 indices_gpu,
                 dists_gpu,
                 knnOptions["dimensions"],
@@ -131,7 +133,7 @@ def KNN(dataTable, k, epsilon=10000000000000., srcDims = 1000000000000000, normD
     del source_gpu
     del indices_gpu
     del dists_gpu
-    #del scratchSpace_gpu
+    del target_gpu
     
     #organise data and add neighbours
     alldists = numpy.concatenate(dists).reshape((-1,knnOptions['k']))[:(knnOptions['dataSize'])].tolist()
