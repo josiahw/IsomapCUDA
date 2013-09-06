@@ -58,8 +58,8 @@ __global__ void KNN(const float* source,
     
     //make local memory arrays
     float distances[CHUNKSIZE];
-    float knnD[MAXKMAX];
-    unsigned int knnI[MAXKMAX];
+    float knnD[MAXKMAX+1];
+    unsigned int knnI[MAXKMAX+1];
     if (elementIndex < sourceLimit) {
         
         for (unsigned int i = 0; i < kMax; ++i) { //Prefill the KNN heap from main memory

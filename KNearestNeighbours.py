@@ -33,7 +33,7 @@ def KNNConfig(dataTable,srcDims, k, eps = 1000000000.,gpuMemSize = 512, settings
     """
     Creates all the memory/data settings to run GPU accelerated KNN.
     """
-    k = 2**int(math.ceil(math.log(k+1)/math.log(2)))
+    k = 2**int(math.ceil(math.log(k+1)/math.log(2)))+1
     print k
     settings = dataConfig(dataTable,settings)
     settings["sourceDims"] = min(settings["sourceDims"],srcDims)
