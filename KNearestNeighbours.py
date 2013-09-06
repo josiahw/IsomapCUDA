@@ -102,7 +102,6 @@ def KNN(dataTable, k, epsilon=10000000000000., srcDims = 1000000000000000, normD
     indices_gpu = drv.mem_alloc(indices[0].nbytes)
     dists_gpu = drv.mem_alloc(dists[0].nbytes)
     
-    #scratchSpace_gpu = drv.mem_alloc(zeros((knnOptions['chunkSize']*knnOptions['chunkSize']),dtype=numpy.float32).nbytes)
     data = [s.T for s in data]
     print data[0].shape,knnOptions['dataSize'],knnOptions['chunkSize']
     print knnOptions['chunkSize']
@@ -128,7 +127,6 @@ def KNN(dataTable, k, epsilon=10000000000000., srcDims = 1000000000000000, normD
         drv.memcpy_dtoh(dists[offset], dists_gpu)
         print indices[offset][:8]
         print dists[offset][:8]
-        #print numpy.int64(offset*knnOptions['chunkSize']),numpy.int64(t*knnOptions['chunkSize']),knnOptions['dataSize'],knnOptions['chunkSize']
         offset += 1
     del source_gpu
     del indices_gpu
