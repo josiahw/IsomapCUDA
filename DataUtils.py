@@ -50,18 +50,18 @@ def loadTable(dataTable,options):
         while len(l) > options["chunkSize"]:
             chunk = []
             for v in l[:options["chunkSize"]]:
-                chunk.append(array([float(p) for p in v.strip('\r\n ').split(',')[:options["sourceDims"]]]).flatten()) #chopping by sourceDims lets us ignore extra columns if we want
+                chunk.append(array([float(p) for p in v.strip('\r\n ').split(',')[:options["sourceDims"]]])) #chopping by sourceDims lets us ignore extra columns if we want
             l = l[options["chunkSize"]:]
-            results.append(array(chunk).flatten().astype(numpy.float32))
+            results.append(array(chunk).astype(numpy.float32))
         chunk = []
         for v in l:
-            chunk.append(array([float(p) for p in v.strip('\r\n ').split(',')[:options["sourceDims"]]]).flatten())
-        results.append(array(chunk).flatten().astype(numpy.float32))
+            chunk.append(array([float(p) for p in v.strip('\r\n ').split(',')[:options["sourceDims"]]]))
+        results.append(array(chunk).astype(numpy.float32))
     else:
         dt = array(dataTable).astype(numpy.float32)
         for i in xrange(len(dt)/options["chunkSize"]):
-            results.append(dt[i*options["chunkSize"]:(i+1)*options["chunkSize"],:options["sourceDims"]].astype(numpy.float32).flatten())
-        results.append(dt[-(len(dt)%options["chunkSize"]):,:options["sourceDims"]].astype(numpy.float32).flatten())
+            results.append(dt[i*options["chunkSize"]:(i+1)*options["chunkSize"],:options["sourceDims"]].astype(numpy.float32))
+        results.append(dt[-(len(dt)%options["chunkSize"]):,:options["sourceDims"]].astype(numpy.float32))
     return results
 
 def loadSplitTable(dataTable):

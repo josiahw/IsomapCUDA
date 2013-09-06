@@ -38,65 +38,95 @@
 */
 #define MAXBLOCKS 65536 //this will probably never get used, but in the event that we are over 10 million objects it helps.
 
+
 __global__ void KNN(const float* source,
                     const float* target,
-                    const long dimensions,
                     unsigned int* indices,
-                    float* distances,
+                    float* knn,
+                    const long dimensions,
                     const long kMax,
-                    const float epsilon,
+                    const long epsilon,
                     const long dataSize, //use longs instead of uints because numpy doesn't support single value uint32
                     const long chunkSize,
                     const long sourceOffset,
-                    const long targetOffset,
-                    const long maxThreads) { //max threads is different per version of CUDA
-
-    // Get the source element indices
-    const size_t elementIndex = (threadIdx.x+blockIdx.x*maxThreads+blockIdx.y*maxThreads*MAXBLOCKS);
-    const size_t sourceBegin = elementIndex * dimensions;
-    const size_t sourceAddress = elementIndex * kMax;
+                    const long targetOffset) {
     
-    //calculate the target and source sizes  - this allows all function calls to share the same values
-    const unsigned int maxTargetSize = min((unsigned int)chunkSize,(unsigned int)(dataSize-targetOffset));
-    const unsigned int maxSourceSize = min((unsigned int)chunkSize,(unsigned int)(dataSize-sourceOffset)); //NOTE: this will still go out of bounds if offsets are larger than dataSize
-    
-    
-    if (elementIndex < maxSourceSize) { //this check allows us to spawn excess threads in CUDA safely (since we can only spawn threads*blocks, can't specify the exact number we want)
+    const unsigned int elementIndex = (threadIdx.x+blockIdx.x*1024+blockIdx.y*1024*MAXBLOCKS);
+    const unsigned int sourceLimit = min((unsigned int)(chunkSize+sourceOffset),(unsigned int)dataSize)-sourceOffset;
+    const unsigned int targetLimit = min((unsigned int)(chunkSize+targetOffset),(unsigned int)dataSize)-targetOffset;
+    const unsigned int offset = elementIndex*kMax;
+    double distances[CHUNKSIZE];
+    float knnD[MAXKMAX];
+    unsigned int knnI[MAXKMAX];
+    if (elementIndex < sourceLimit) {
+        for (unsigned int i = 0; i < targetLimit; i++) {
+            distances[i] = 0.0;
+        }
         
-        // Check the distance for all of the points in our target chunk
-        for (unsigned int i = 0; i < maxTargetSize; i++) {
-
-            // Calculating the distance from our source point to our target point
-            float distance = 0.0;
-            for (unsigned int j = 0; j < dimensions; j++) {
-                
-                float value = target[i * dimensions + j] - source[sourceBegin + j];
-                distance += value * value;
-            }
-            distance = sqrt(distance);
-
-
-            // Check if we are one of the K nearest (the nearest neighbours are sorted)
-            if (distance < distances[sourceAddress + kMax - 1]
-                // Check we are not looking at ourself
-                && (targetOffset + i) != (elementIndex + sourceOffset)) {
-
-                // Find where we fit in in the list of nearests
-                unsigned int j = 0;
-                while (distance > distances[sourceAddress + j]) {
-                    j++;
-                }
-
-                // Shuffle all our data along to make room
-                for (unsigned int k = kMax - 1; k > j; k--) {
-                    distances[sourceAddress + k] = distances[sourceAddress + k - 1];
-                    indices[sourceAddress + k] = indices[sourceAddress + k - 1];
-                }
-
-                // Add our new nearest point into it's rightful place
-                distances[sourceAddress + j] = distance;
-                indices[sourceAddress + j] = targetOffset + i;
+        for (unsigned int j = 0; j < dimensions; j++) {
+            const double s = source[elementIndex + j*sourceLimit];
+            for (unsigned int i = 0; i < targetLimit; i++) {
+                const double value = target[i  + j*targetLimit] - s;
+                distances[i] += value * value;
             }
         }
+        
+        //Prefill the KNN with epsilons to filter out garbage
+        for (unsigned int i = 0; i < kMax; ++i) {
+            knnD[i] = knn[offset + i];
+            knnI[i] = indices[offset + i];
+        }
+        
+        //use a binary maxheap to insert new neighbours
+        for (unsigned int i = 0; i < targetLimit; ++i) {
+            //get the next distance
+            const float d = sqrt(distances[i]);
+            unsigned int index = 0 + (d < knnD[0]);
+            while (index < kMax and (knnD[index] > d or knnD[index+1] > d)) {
+                
+                //get the index of the new largest leaf
+                const unsigned int newIndex = index+(knnD[index]<knnD[index+1]);
+                
+                //shift the leaf up
+                knnD[index/2] = knnD[newIndex];
+                knnI[index/2] = knnI[newIndex];
+                
+                //increment the target index
+                index = 2*newIndex+1;
+            }
+            if (index != 0) {
+                knnD[index/2] = d;
+                knnI[index/2] = i+targetOffset;
+            }
+        }
+        
+        //Prefill the KNN with epsilons to filter out garbage
+        for (unsigned int i = 0; i < kMax; ++i) {
+            knn[offset + i] = knnD[i];
+            indices[offset + i] = knnI[i];
+        }
+        
+        /*
+        //copy the heap to global memory
+        for (int i = kMax-1; i >= 0; --i) {
+            
+            knn[offset + i] = knnD[0]; //kMax-i-1];
+            indices[offset + i] = knnI[0]; //kMax-i-1];
+            
+            unsigned int index = 0;
+            while (index < kMax and (knnD[index] > 0. or knnD[index+1] > 0.)) {
+                
+                //get the index of the new largest leaf
+                const unsigned int newIndex = index+(knnD[index]<knnD[index+1]);
+                
+                //shift the leaf up
+                knnD[index/2] = knnD[newIndex];
+                knnI[index/2] = knnI[newIndex];
+                
+                //increment the target index
+                index = 2*newIndex+1;
+            }
+            knnD[index/2] = -1.;//epsilon;
+        }*/
     }
 }

@@ -33,6 +33,8 @@ def KNNConfig(dataTable,srcDims, k, eps = 1000000000.,gpuMemSize = 512, settings
     """
     Creates all the memory/data settings to run GPU accelerated KNN.
     """
+    k = 2**int(math.ceil(math.log(k+1)/math.log(2)))
+    print k
     settings = dataConfig(dataTable,settings)
     settings["sourceDims"] = min(settings["sourceDims"],srcDims)
     
@@ -41,14 +43,19 @@ def KNNConfig(dataTable,srcDims, k, eps = 1000000000.,gpuMemSize = 512, settings
     settings["maxThreads"] = 1024
     
     #set up chunk sizes
-    memoryPerElement = k*4*2*settings["dataLength"] + (settings["sourceDims"]*4)*2 + 20*4 #this is an estimated memory used per element
-    settings["chunkSize"] = min(int(math.ceil(float(settings["memSize"])/memoryPerElement)),settings["dataLength"])
+    memoryPerElement = k*4*4 + (settings["sourceDims"]*4)*2 + 30 #+ (k+10)*4*2 #this is an estimated memory used per element
+    ctr = 0
+    while memoryPerElement*ctr + ctr*ctr*8*2 < settings["memSize"] and ctr*settings["sourceDims"]<1000000:
+        ctr += 1
+    ctr -= 1
+    print ctr
+    settings["chunkSize"] = min(ctr,settings["dataLength"])
     settings["lastChunkSize"] = ((settings["dataLength"]-1) % settings["chunkSize"]) + 1
     
     #create kernel gridsize tuples
     settings["block"] = (settings["maxThreads"],1,1)
-    settings["grid"] = (max(int(math.ceil(float(settings["chunkSize"])/settings["maxThreads"])),1),1,1)
-    
+    settings["grid"] = ((settings["chunkSize"]/settings["maxThreads"])+(settings["chunkSize"]%settings["maxThreads"]>0),1,1)
+    print settings["block"],settings["grid"]
     #precalculate all constant kernel params
     settings["dimensions"] = numpy.int64(settings["sourceDims"])
     settings["k"] = numpy.int64(k)
@@ -59,7 +66,7 @@ def KNNConfig(dataTable,srcDims, k, eps = 1000000000.,gpuMemSize = 512, settings
     
     return settings
 
-def KNN(dataTable, k, epsilon, srcDims = 1000000000000000, normData = False):
+def KNN(dataTable, k, epsilon=10000000000000., srcDims = 1000000000000000, normData = False):
     """
     Get a k,epsilon version k nearest neighbours
     """
@@ -77,7 +84,8 @@ def KNN(dataTable, k, epsilon, srcDims = 1000000000000000, normData = False):
         data = [(d-dmin)/(dmax-dmin+0.00000001) for d in data]
     
     #create the CUDA kernels
-    program = SourceModule(open(KernelLocation+"KNN.nvcc").read())
+    header = "#define MAXKMAX ("+str(knnOptions['k'])+")\n#define CHUNKSIZE ("+str(knnOptions['chunkSize'])+")\n"
+    program = SourceModule(header+open(KernelLocation+"KNN.nvcc").read())
     prg = program.get_function("KNN")
     t0 = time.time()
     
@@ -87,11 +95,17 @@ def KNN(dataTable, k, epsilon, srcDims = 1000000000000000, normData = False):
     dists = [distances0.copy() for i in xrange(len(data))]
     indices = [indices0.copy() for i in xrange(len(data))]
     
+    
     #calculate KNN
     offset = 0
     source_gpu = drv.mem_alloc(data[0].nbytes)
     indices_gpu = drv.mem_alloc(indices[0].nbytes)
     dists_gpu = drv.mem_alloc(dists[0].nbytes)
+    
+    #scratchSpace_gpu = drv.mem_alloc(zeros((knnOptions['chunkSize']*knnOptions['chunkSize']),dtype=numpy.float32).nbytes)
+    data = [s.T for s in data]
+    print data[0].shape,knnOptions['dataSize'],knnOptions['chunkSize']
+    print knnOptions['chunkSize']
     for source in data:
         drv.memcpy_htod(source_gpu, source)
         drv.memcpy_htod(indices_gpu, indices[offset])
@@ -99,24 +113,27 @@ def KNN(dataTable, k, epsilon, srcDims = 1000000000000000, normData = False):
         for t in xrange(len(data)):
             prg(source_gpu,
                 drv.In(data[t]),
-                knnOptions["dimensions"],
                 indices_gpu,
                 dists_gpu,
+                knnOptions["dimensions"],
                 knnOptions['k'],
                 knnOptions['eps'],
                 knnOptions['dataSize'],
                 knnOptions['chunkSize'],
-                numpy.int64(offset),
-                numpy.int64(t),
-                knnOptions['maxThreads'],
+                numpy.int64(offset*knnOptions['chunkSize']),
+                numpy.int64(t*knnOptions['chunkSize']),
                 block=knnOptions['block'],
                 grid=knnOptions['grid'])
         drv.memcpy_dtoh(indices[offset], indices_gpu)
         drv.memcpy_dtoh(dists[offset], dists_gpu)
+        print indices[offset][:8]
+        print dists[offset][:8]
+        #print numpy.int64(offset*knnOptions['chunkSize']),numpy.int64(t*knnOptions['chunkSize']),knnOptions['dataSize'],knnOptions['chunkSize']
         offset += 1
     del source_gpu
     del indices_gpu
     del dists_gpu
+    #del scratchSpace_gpu
     
     #organise data and add neighbours
     alldists = numpy.concatenate(dists).reshape((-1,knnOptions['k']))[:(knnOptions['dataSize'])].tolist()
