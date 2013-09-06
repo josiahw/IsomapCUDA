@@ -182,7 +182,7 @@ def NMDS(dataTable,origData, origDims, trgDims):
     blk = (1024,chunksize/1024+(chunksize%1024>0),1)
     elementBlk = (1024,2*nmdsOptions['sourceDims']/1024+(2*nmdsOptions['sourceDims']%1024>0),1) #nmdsOptions['targetDims'])
     drv.memcpy_htod(embedding_gpu, embeddingCoords)
-    while deltasums >1.1 and m < 700:
+    while deltasums > 1.007 and m < 2000:
         #saveTable(embeddingCoords,'unroll/embedding'+str(m).zfill(4)+'.csv')
         #step 1: get all distances
         t1 = time.time()
@@ -309,8 +309,8 @@ def NMDS(dataTable,origData, origDims, trgDims):
         m += 1
         #print time.time()-t1, " seconds to run NMDS iter."
         if m % 20 == 0:
-            deltasums = sum([sum(point*point) for point in d])/(1250*2497)
-            print deltasums, "\t(Target is < 1.1)"
+            deltasums = (deltasums+sum([sum(point*point) for point in d])/(1250*2497))/2.
+            print deltasums, "\t(Target is < 1.007)"
         
         #print "iter ",m," done"
     print time.time()-t0, " seconds to run NMDS."

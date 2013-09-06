@@ -47,7 +47,7 @@ def QEConfig(dataTable, dims, k = -1, eps = 0.00001,gpuMemSize = 512, settings =
     
     settings["k"] = k
     if k < 0:
-        settings["k"] = settings["dataLength"]/125
+        settings["k"] = min(settings["dataLength"]/125,50)
     settings["delta"] = eps
     settings["targetDims"] = dims
     
@@ -200,9 +200,11 @@ def QEig(dataTable,dims=3, k = -1, delta=0.00000002, initialBasis=[]):
     v = v[:,:dims].real
     e = abs(e[:dims].real)**0.5
     
-    out = (e*numpy.dot(basisMatrix[:basisSize,:dims].T,v)).T[:dims]
-    print time.time()-t0, " seconds to process Eigenvalues"
+    print v.shape,e.shape,basisMatrix[:basisSize].shape
     
+    out = (numpy.dot(basisMatrix[:basisSize].T,v).T) #[:dims]
+    print time.time()-t0, " seconds to process Eigenvalues"
+    print out.shape
     return out.T
     
     

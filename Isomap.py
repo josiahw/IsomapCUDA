@@ -46,7 +46,7 @@ def Isomap(dataSet,outfile,srcDims,trgDims,k,eps=1000000000., saveSteps = False)
     
     #then get eigenvalues
     #embedding = EigenEmbedding(normMatrix,trgDims)
-    embedding = QSVD(normMatrix,trgDims)
+    embedding = QEig(normMatrix,trgDims)
     del normMatrix
     
     return embedding
