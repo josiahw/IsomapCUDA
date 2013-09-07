@@ -29,25 +29,36 @@ KernelLocation = "CudaKernels/KNN/"
 
 # KNN Algorithm --------------------------------------------
 
+def GPUConfig(settings,memPerElement,memPerElementSq,limit=1000000000):
+    
+    
+    return settings
+
 def KNNConfig(dataTable,srcDims, k, eps = 1000000000.,gpuMemSize = 512, settings = {}):
     """
     Creates all the memory/data settings to run GPU accelerated KNN.
     """
-    k = 2**int(math.ceil(math.log(k+1)/math.log(2)))+1
-    print k
+    kmax = 2**int(math.ceil(math.log(k+1)/math.log(2)))+1
+    settings["oldk"] = k
+    settings["kmax"] = kmax
+    k = kmax
     settings = dataConfig(dataTable,settings)
     settings["sourceDims"] = min(settings["sourceDims"],srcDims)
-    
+    print k,kmax
     #XXX: determine memory and thread sizes from device
     settings["memSize"] = gpuMemSize*1024*1024
     settings["maxThreads"] = 1024
     
     #set up chunk sizes
-    memoryPerElement = k*4*4 + (settings["sourceDims"]*4)*2 + 30 #+ (k+10)*4*2 #this is an estimated memory used per element
+    memoryPerElement = k*4*2+kmax*4*2 + (settings["sourceDims"]*4)*2 + 30 #+ (k+10)*4*2 #this is an estimated memory used per element
+    MemoryPerElementSquared = 8*2
     ctr = 0
     while memoryPerElement*ctr + ctr*ctr*8*2 < settings["memSize"] and ctr*settings["sourceDims"]<1000000:
         ctr += 1
     ctr -= 1
+    
+    #settings = GPUConfig(settings,memoryPerElement,memoryPerElementsquared,1000000/settings["sourceDims"])
+    
     print ctr
     settings["chunkSize"] = min(ctr,settings["dataLength"])
     settings["lastChunkSize"] = ((settings["dataLength"]-1) % settings["chunkSize"]) + 1
@@ -84,9 +95,11 @@ def KNN(dataTable, k, epsilon=10000000000000., srcDims = 1000000000000000, normD
         data = [(d-dmin)/(dmax-dmin+0.00000001) for d in data]
     
     #create the CUDA kernels
-    header = "#define MAXKMAX ("+str(knnOptions['k'])+")\n#define CHUNKSIZE ("+str(knnOptions['chunkSize'])+")\n"
+    header = "#define MAXKMAX ("+str(knnOptions['kmax'])+")\n#define CHUNKSIZE ("+str(knnOptions['chunkSize'])+")\n"
     program = SourceModule(header+open(KernelLocation+"KNN.nvcc").read())
     prg = program.get_function("KNN")
+    sortprogram = SourceModule(header+open(KernelLocation+"KNNSORT.nvcc").read())
+    sort = sortprogram.get_function("KNNSORT")
     t0 = time.time()
     
     #make a default distance list
@@ -125,10 +138,18 @@ def KNN(dataTable, k, epsilon=10000000000000., srcDims = 1000000000000000, normD
                 numpy.int64(t*knnOptions['chunkSize']),
                 block=knnOptions['block'],
                 grid=knnOptions['grid'])
+        sort(dists_gpu,
+            indices_gpu,
+            numpy.int64(knnOptions['oldk']),
+            knnOptions['dataSize'],
+            knnOptions['chunkSize'],
+            numpy.int64(offset*knnOptions['chunkSize']),
+            block=knnOptions['block'],
+            grid=knnOptions['grid'])
         drv.memcpy_dtoh(indices[offset], indices_gpu)
         drv.memcpy_dtoh(dists[offset], dists_gpu)
-        print indices[offset][:8]
-        print dists[offset][:8]
+        print indices[offset][:9]
+        print dists[offset][:9]
         offset += 1
     del source_gpu
     del indices_gpu
@@ -136,11 +157,14 @@ def KNN(dataTable, k, epsilon=10000000000000., srcDims = 1000000000000000, normD
     del target_gpu
     
     #organise data and add neighbours
-    alldists = numpy.concatenate(dists).reshape((-1,knnOptions['k']))[:(knnOptions['dataSize'])].tolist()
-    allindices = numpy.concatenate(indices).reshape((-1,knnOptions['k']))[:(knnOptions['dataSize'])].tolist()
+    alldists = numpy.concatenate(dists).reshape((-1,knnOptions['k']))[:(knnOptions['dataSize']),:knnOptions['oldk']].tolist()
+    allindices = numpy.concatenate(indices).reshape((-1,knnOptions['k']))[:(knnOptions['dataSize']),:knnOptions['oldk']].tolist()
     for i in xrange(len(alldists)): #remove excess entries
         if knnOptions['eps'] in alldists[i]:
             ind = alldists[i].index(knnOptions['eps'])
+            alldists[i] = alldists[i][:ind]
+            allindices[i] = allindices[i][:ind]
+            ind = allindices[i].index(i)
             alldists[i] = alldists[i][:ind]
             allindices[i] = allindices[i][:ind]
     for i in xrange(len(alldists)):
