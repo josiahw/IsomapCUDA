@@ -33,12 +33,13 @@ from QuicEig import QEig
 # APSP Algorithm ---------------------------------------------------
 KernelLocation = "CudaKernels/APSP/"
 
-def APSPConfig(dataTable, eps=100000000., gpuMemSize = 512, settings = {}):
+def APSPConfig(dataTable,knn_m, eps=100000000., gpuMemSize = 512, settings = {}):
     """
     Creates all the memory/data settings to run GPU accelerated APSP.
     """
     
     settings = dataConfig(dataTable,settings)
+    settings["dataLength"] = len(knn_m)-1
     
     #XXX: determine memory and thread sizes from device
     settings["memSize"] = gpuMemSize*1024*1024
@@ -63,11 +64,11 @@ def APSPConfig(dataTable, eps=100000000., gpuMemSize = 512, settings = {}):
     
 
 
-def APSP(knn_refs,knn_dists,eps):
+def APSP(knn_refs,knn_dists,knn_m,eps):
     #timekeeping for profiling purposes
     t0 = time.time()
     
-    apspOptions = APSPConfig(knn_dists,eps)
+    apspOptions = APSPConfig(knn_dists,knn_m,eps)
     
     #create the kernels
     sssp1 = SourceModule(open(KernelLocation+"SSSP.nvcc").read())
@@ -82,8 +83,6 @@ def APSP(knn_refs,knn_dists,eps):
                     numpy.intp,
                     numpy.intp,
                     numpy.int64,
-                    numpy.int64,
-                    numpy.float32,
                     numpy.int64])
     
     #create our template cost list
@@ -100,6 +99,7 @@ def APSP(knn_refs,knn_dists,eps):
     #initialise our GPU resident memory arrays
     refs_gpu = drv.mem_alloc(knn_refs.nbytes)
     dists_gpu = drv.mem_alloc(knn_dists.nbytes)
+    m_gpu = drv.mem_alloc(knn_m.nbytes)
     costs1_gpu = drv.mem_alloc(Costs0.nbytes)
     costs2_gpu = drv.mem_alloc(Costs0.nbytes)
     
@@ -108,28 +108,28 @@ def APSP(knn_refs,knn_dists,eps):
     #copy static data onto the GPU
     drv.memcpy_htod(refs_gpu, knn_refs)
     drv.memcpy_htod(dists_gpu, knn_dists)
+    drv.memcpy_htod(m_gpu, knn_m)
     
     #iterate through every row of the path cost matrix
     for v in xrange(0,apspOptions['dataLength']):
-        
         #create a new row for the cost matrix, from the template list
         Costs = Costs0.copy().astype(numpy.float32)
         Costs[v] = 0.
         
         #initialise the costs we have for the immediate neighbours (this saves a single iteration of SSSP, and is faster to do this way)
-        for n in xrange(apspOptions['k']):
-            if knn_dists[v][n] < apspOptions['eps']:
-                Costs[knn_refs[v][n]] = knn_dists[v][n]
+        for n in xrange(knn_m[v],knn_m[v+1]):
+            if knn_dists[n] < apspOptions['eps']:
+                Costs[knn_refs[n]] = knn_dists[n]
         
         #copy the initial Costs row into the gpu
         drv.memcpy_htod(costs1_gpu, Costs)
         
         #pre-populate the costs with entries we've already solved
         #XXX: 10 is a hack, should be the degree of the vertex
-        prefill = min(len(Matrix),30)
-        for i in xrange(len(knn_refs[v])):
-            s = knn_refs[v][i]
-            if s < v and knn_dists[v][i] < apspOptions['eps']:
+        prefill = min(len(Matrix),knn_m[v+1]-knn_m[v])
+        for i in xrange(knn_m[v],knn_m[v+1]):
+            s = knn_refs[i]
+            if s < v and knn_dists[i] < apspOptions['eps']:
                 drv.memcpy_htod(costs2_gpu, Matrix[s])
                 seed(costs2_gpu, costs1_gpu,
                      numpy.int64(v),
@@ -138,6 +138,7 @@ def APSP(knn_refs,knn_dists,eps):
                      grid=apspOptions['grid'],
                      block=apspOptions['block'])
                 prefill -=1
+        
         #comment out for benchmarking due to non deterministic speedup
         if prefill > 0:
             for m in random.sample(Matrix,min(len(Matrix),prefill)):
@@ -149,53 +150,24 @@ def APSP(knn_refs,knn_dists,eps):
                      grid=apspOptions['grid'],
                      block=apspOptions['block'])
         
-        
-        #iteratively expand the shortest paths (1 iter per kernel run) until we have all the paths
-        for i in xrange(last-2):
-            #use 2 kernels copying back and forth between cost matrices to ensure no sync issues
-            kernel.prepared_call(
-                    apspOptions['grid'],
-                    apspOptions['block'], refs_gpu, dists_gpu,
-                    costs1_gpu, costs2_gpu,
-                    changed_gpu, apspOptions['dataSize'],
-                    apspOptions['k'], apspOptions['eps'],
-                    apspOptions['maxThreads'] )
-            kernel.prepared_call(
-                    apspOptions['grid'],
-                    apspOptions['block'], refs_gpu, dists_gpu,
-                    costs2_gpu, costs1_gpu,
-                    changed_gpu, apspOptions['dataSize'],
-                    apspOptions['k'], apspOptions['eps'],
-                    apspOptions['maxThreads'],)
-        l = last-12
-        
         #XXX: is this the best way to pass a flag back?
+        l = 0
         cval = 1
         changed[0] = 0
         drv.memcpy_htod(changed_gpu, changed)
-        while cval != 0 or l > 5000:
+        while cval != 0 and l < apspOptions['dataLength']:
             kernel.prepared_call(
                     apspOptions['grid'],
-                    apspOptions['block'], refs_gpu, dists_gpu,
-                    costs1_gpu, costs2_gpu,
+                    apspOptions['block'], m_gpu, refs_gpu, dists_gpu,
+                    costs1_gpu,
                     changed_gpu, apspOptions['dataSize'],
-                    apspOptions['k'], apspOptions['eps'],
-                    apspOptions['maxThreads'], )
-            kernel.prepared_call( 
-                    apspOptions['grid'],
-                    apspOptions['block'],refs_gpu, dists_gpu,
-                    costs2_gpu, costs1_gpu,
-                    changed_gpu, apspOptions['dataSize'],
-                    apspOptions['k'], apspOptions['eps'],
-                    apspOptions['maxThreads'],)
+                    apspOptions['maxThreads'])
             l += 1
-            drv.memcpy_dtoh(changed, changed_gpu)
-            cval = changed[0]
-            changed[0] = 0
-            drv.memcpy_htod(changed_gpu, changed)
-            
-        last = max(l,1)
-        
+            if not l % 5:
+                drv.memcpy_dtoh(changed, changed_gpu)
+                cval = changed[0]
+                changed[0] = 0
+                drv.memcpy_htod(changed_gpu, changed)
         #copy costs back into memory
         drv.memcpy_dtoh(Costs, costs1_gpu)
         
@@ -207,6 +179,7 @@ def APSP(knn_refs,knn_dists,eps):
     del costs2_gpu
     del refs_gpu
     del dists_gpu
+    del m_gpu
     
     print time.time()-t0, " seconds to create shortest paths."
     

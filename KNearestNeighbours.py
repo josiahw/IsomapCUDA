@@ -44,7 +44,6 @@ def KNNConfig(dataTable,srcDims, k, eps = 1000000000.,gpuMemSize = 512, settings
     k = kmax
     settings = dataConfig(dataTable,settings)
     settings["sourceDims"] = min(settings["sourceDims"],srcDims)
-    print k,kmax
     #XXX: determine memory and thread sizes from device
     settings["memSize"] = gpuMemSize*1024*1024
     settings["maxThreads"] = 1024
@@ -59,14 +58,12 @@ def KNNConfig(dataTable,srcDims, k, eps = 1000000000.,gpuMemSize = 512, settings
     
     #settings = GPUConfig(settings,memoryPerElement,memoryPerElementsquared,1000000/settings["sourceDims"])
     
-    print ctr
     settings["chunkSize"] = min(ctr,settings["dataLength"])
     settings["lastChunkSize"] = ((settings["dataLength"]-1) % settings["chunkSize"]) + 1
     
     #create kernel gridsize tuples
     settings["block"] = (settings["maxThreads"],1,1)
     settings["grid"] = ((settings["chunkSize"]/settings["maxThreads"])+(settings["chunkSize"]%settings["maxThreads"]>0),1,1)
-    print settings["block"],settings["grid"]
     #precalculate all constant kernel params
     settings["dimensions"] = numpy.int64(settings["sourceDims"])
     settings["k"] = numpy.int64(k)
@@ -117,8 +114,6 @@ def KNN(dataTable, k, epsilon=10000000000000., srcDims = 1000000000000000, normD
     dists_gpu = drv.mem_alloc(dists[0].nbytes)
     
     data = [s.T.flatten() for s in data]
-    print data[0].shape,knnOptions['dataSize'],knnOptions['chunkSize']
-    print knnOptions['chunkSize']
     for source in data:
         drv.memcpy_htod(source_gpu, source)
         drv.memcpy_htod(indices_gpu, indices[offset])
@@ -148,8 +143,6 @@ def KNN(dataTable, k, epsilon=10000000000000., srcDims = 1000000000000000, normD
             grid=knnOptions['grid'])
         drv.memcpy_dtoh(indices[offset], indices_gpu)
         drv.memcpy_dtoh(dists[offset], dists_gpu)
-        print indices[offset][:9]
-        print dists[offset][:9]
         offset += 1
     del source_gpu
     del indices_gpu
@@ -174,12 +167,14 @@ def KNN(dataTable, k, epsilon=10000000000000., srcDims = 1000000000000000, normD
                     allindices[ind].append(i)
                     alldists[ind].append(alldists[i][j])
                 j += 1
-    maxKValues = max([len(p) for p in allindices]) 
-    #print maxKValues
+    
+    #have a list for start and end indices for knn
+    klist = [0]
     for i in xrange(len(alldists)): #pad all entries to the same length for the next algorithm
-        if len(alldists[i]) < maxKValues:
-            alldists[i].extend( [knnOptions['eps']]*(maxKValues-len(alldists[i])) )
-            allindices[i].extend( [0]*(maxKValues-len(allindices[i])) )
+        klist.append(len(alldists[i])+klist[-1])
+    alldists = array([j for i in alldists for j in i],dtype=numpy.float32)
+    allindices = array([j for i in allindices for j in i],dtype=numpy.uint32)
+    klist = array(klist,dtype=numpy.uint32)
     
     print time.time()-t0, " seconds to process KNN"
     """
@@ -195,7 +190,7 @@ def KNN(dataTable, k, epsilon=10000000000000., srcDims = 1000000000000000, normD
     f.close()
     """
 
-    return [allindices[i]+alldists[i] for i in xrange(len(alldists))]
+    return allindices, alldists, klist #[allindices[i]+alldists[i] for i in xrange(len(alldists))]
 
 
 

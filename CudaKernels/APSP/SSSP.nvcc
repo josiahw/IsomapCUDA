@@ -32,14 +32,12 @@
 */
 #define MAXBLOCKS 65536 //this will probably never get used, but in the event that we are over 10 million objects it helps.
 
-__global__ void SSSP(const unsigned int* Edges, 
+__global__ void SSSP(const unsigned int* StartStop, 
+                     const unsigned int* Edges, 
                      const float* Weights, 
-                     const float* Costs, 
-                     float* Paths,
+                      float* Costs, 
                      unsigned int* AnyChange,
                      const long dataSize,
-                     const long kMax,
-                     const float epsilon,
                      const long maxThreads) {
     
     //calculate our vertex position
@@ -53,20 +51,19 @@ __global__ void SSSP(const unsigned int* Edges,
         bool Changed = false;
         
         //for all neighbours, check whether distance to neighbour + edge weight < initial cost, and if so replace
-        for(unsigned int i = 0; Weights[vertex*kMax+i] < epsilon and i < kMax; ++i) {
-            const unsigned int neighbourid = vertex*kMax+i;
-            const float d = (Costs[Edges[neighbourid]]+Weights[neighbourid]);
+        for(unsigned int i = StartStop[vertex]; i < StartStop[vertex+1]; ++i) {
+            const float d = (Costs[Edges[i]]+Weights[i]);
             const bool c = d < p;
             const float c2 = c;
             p = c2*d + (1.-c2)*p;
             Changed = Changed or c;
         }
-        
+        atomicExch(Costs+vertex,p);
         //save back into memory
         if (Changed) {
             AnyChange[0] = 1;
         }
-        Paths[vertex] = p;
+        //Paths[vertex] = p;
     }
 }
 

@@ -34,7 +34,9 @@ def dataConfig(dataTable,settings = {}):
             f = len(f)-1
         settings["dataLength"] = f
     else:
-        settings["sourceDims"] = len(dataTable[0])
+        settings["sourceDims"] = len(dataTable)
+        if len(dataTable.shape) > 1:
+            settings["sourceDims"] = len(dataTable[0])
         settings["dataLength"] = len(dataTable)
     return settings
 

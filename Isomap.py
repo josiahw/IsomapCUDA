@@ -28,12 +28,13 @@ def Isomap(dataSet,outfile,srcDims,trgDims,k,eps=1000000000., saveSteps = False)
     """
     
     #first do KNN
-    knnRefs,knnDists = loadSplitTable(KNN(dataSet,k,eps,srcDims))
+    knnRefs,knnDists,knnm = KNN(dataSet,k,eps,srcDims)
     
     #then do APSP
-    pathMatrix = APSP(knnRefs,knnDists,eps)
+    pathMatrix = APSP(knnRefs,knnDists,knnm,eps)
     del knnRefs
     del knnDists
+    del knnm
     
     #XXX:hacky way of saving this info
     if saveSteps:

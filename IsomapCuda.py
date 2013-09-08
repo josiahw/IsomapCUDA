@@ -139,3 +139,14 @@ def RankMatrix(dataTable):
     
     return numpy.array(result)[:,1:].astype(numpy.uint32) #,array(result)[:,:1].astype(numpy.float32)
 
+
+#Get C-Isomap m-values --------------------------------------------------------
+
+def C_Isomap(knndists,epsilon):
+    mvals = []
+    for k in knndists:
+        ctr = 0
+        while k[ctr] < epsilon:
+            ctr += 1
+        mvals.append(sum(k[:ctr])/ctr)
+    return numpy.array(mvals,dtype=numpy.float32)
