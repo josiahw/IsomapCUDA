@@ -31,72 +31,43 @@ from NonMetricMultiDimensionalScaling import NMDS
 from QuicEig import QEig
 from ShortestPaths import APSP
 
+#Get RankMatrix --------------------------------------------------------
+
+def RankMatrix(dataTable):
+    t0 = time.time()
+    result = []
+    for i in xrange(0,len(dataTable)):
+        for j in xrange(i+1,len(dataTable)):
+            result.append((dataTable[i][j],i,j))
+    result.sort()
+    print time.time()-t0, " seconds to compute Rank Matrix."
+    
+    return numpy.array(result)[:,1:].astype(numpy.uint32) #,array(result)[:,:1].astype(numpy.float32)
+
+
+#Get C-Isomap m-values --------------------------------------------------------
+
+def C_Isomap(knndists,knnm,k):
+    mvals = zeros(len(knnm)-1,dtype=numpy.float32)
+    for i in xrange(len(knnm)-1):
+        mvals[i] = (sum(knndists[knnm[i]:knnm[i]+k])/k)
+    return numpy.sqrt(mvals)
+
 #Normalisation for Eigen Embedding ---------------------------------------------
 
-def NormMatrixConfig(dataTable, gpuMemSize = 512, settings = {}):
-    """
-    Creates all the memory/data settings to run GPU accelerated APSP.
-    """
-    
-    
-    settings = dataConfig(dataTable,settings)
-    
-    settings["memSize"] = gpuMemSize*1024*1024
-    settings["k"] = settings["sourceDims"]
-    #settings["eps"] = eps
-    
-    #calculate memory constraints for the matrix chunks
-    sumMem = 6*settings["dataLength"]
-    chunkMem = (settings["memSize"]-sumMem)/4/settings["dataLength"]
-    if chunkMem < 1:
-        raise "GPU memory too small for norming the matrix!"
-    
-    settings["chunkSize"] = min(chunkMem,512)
-    
-    settings["lastChunkSize"] = settings["dataLength"] % settings["chunkSize"]
-    
-    if settings["lastChunkSize"] > 0:
-        settings["totalChunks"] = settings["dataLength"]/settings["chunkSize"]+1
-    else:
-        settings["totalChunks"] = settings["dataLength"]/settings["chunkSize"]
-    
-    settings["block"] = (min(max(settings["dataLength"],1),512),1,1) #XXX: fix this for using the device data on max threads
-    g1 = int(math.ceil(settings["dataLength"]/512.))
-    g2 = int(math.ceil(g1/512.))
-    g3 = int(math.ceil(g2/64.))
-    settings["grid"] = (max(g1,1),max(g2,1),max(g3,1))
-    return settings
-
-def NormMatrix(dataTable,nmOptions):
+def NormMatrix(dataTable, mlabels = []):
+        dataLength = len(dataTable)
         t0 = time.time()
         
-        normedMatrix = loadMatrix(dataTable)
+        normedMatrix = dataTable*dataTable
+        if len(mlabels):
+            for i in xrange(len(normedMatrix)):
+                normedMatrix[i] /=mlabels[i]
+                normedMatrix[:,i] /=mlabels[i]
         
-        normedMatrix = normedMatrix*normedMatrix
-        normsums = array([sum(r) for r in normedMatrix])/nmOptions['dataLength']
+        normsums = numpy.sum(normedMatrix,axis=1)/dataLength
         
-        """
-        progstr = ("__global__ void SumSquare(const unsigned int totalNodes, float* Sums, float* Paths) {\n"+
-                   "    const unsigned int v = threadIdx.x+blockIdx.x*512+blockIdx.y*512*512;\n" +
-                   "    if (v < "+str(nmOptions['dataLength'])+") {\n" +
-                   "        double sum = 0.0;\n" +
-                   "        for (unsigned int j = 0; j < "+str(nmOptions['chunkSize'])+"; j++) {\n" +
-                   "            Paths[j*"+str(nmOptions['dataLength'])+"+v] = Paths[j*"+str(nmOptions['dataLength'])+"+v]*Paths[j*"+str(nmOptions['dataLength'])+"+v];\n" +
-                   "            sum += Paths[j*"+str(nmOptions['dataLength'])+"+v];\n" +
-                   "        }\n" +
-                   "        Sums[v] += sum / "+str(nmOptions['dataLength'])+";\n" +
-                   "    }\n" +
-                   "}\n")
-        program = SourceModule(progstr)
-        prg = program.get_function("SumSquare")
-        normsums = zeros(nmOptions['dataLength']).astype(numpy.float32)
-        for i in xrange(nmOptions['totalChunks']):
-            normsample = normedMatrix[i*nmOptions['chunkSize']:(i+1)*nmOptions['chunkSize']].flatten()
-            prg(drv.In(numpy.uint32(nmOptions['dataLength'])),drv.InOut(normsums),drv.InOut(normsample),grid=nmOptions['grid'],block=nmOptions['block'])
-            normedMatrix[i*nmOptions['chunkSize']:(i+1)*nmOptions['chunkSize']] = normsample.reshape((nmOptions['chunkSize'],nmOptions['dataLength']))
-        """
-        
-        allsums = sum(normsums)/nmOptions['dataLength']
+        allsums = numpy.sum(normsums)/dataLength
         for i in xrange(len(normedMatrix)):
             normedMatrix[i] = -0.5*(normedMatrix[i] - normsums - normsums[i] + allsums)
         print time.time()-t0, " seconds to normalize the matrix."
@@ -126,27 +97,5 @@ def EigenEmbedding(dataTable, finalDims = 3):
     
     return e
 
-#Get RankMatrix --------------------------------------------------------
 
-def RankMatrix(dataTable):
-    t0 = time.time()
-    result = []
-    for i in xrange(0,len(dataTable)):
-        for j in xrange(i+1,len(dataTable)):
-            result.append((dataTable[i][j],i,j))
-    result.sort()
-    print time.time()-t0, " seconds to compute Rank Matrix."
     
-    return numpy.array(result)[:,1:].astype(numpy.uint32) #,array(result)[:,:1].astype(numpy.float32)
-
-
-#Get C-Isomap m-values --------------------------------------------------------
-
-def C_Isomap(knndists,epsilon):
-    mvals = []
-    for k in knndists:
-        ctr = 0
-        while k[ctr] < epsilon:
-            ctr += 1
-        mvals.append(sum(k[:ctr])/ctr)
-    return numpy.array(mvals,dtype=numpy.float32)

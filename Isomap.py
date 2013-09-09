@@ -22,13 +22,16 @@ import getopt,sys
 
 GPU_MEM_SIZE = 512
 
-def Isomap(dataSet,outfile,srcDims,trgDims,k,eps=1000000000., saveSteps = False):
+def Isomap(dataSet,outfile,srcDims,trgDims,k,eps=1000000000., CIsomap=False):
     """
     Classical isomap
     """
     
     #first do KNN
     knnRefs,knnDists,knnm = KNN(dataSet,k,eps,srcDims)
+    mdists = []
+    if CIsomap:
+        mdists = C_Isomap(knnDists,knnm,k)
     
     #then do APSP
     pathMatrix = APSP(knnRefs,knnDists,knnm,eps)
@@ -36,14 +39,10 @@ def Isomap(dataSet,outfile,srcDims,trgDims,k,eps=1000000000., saveSteps = False)
     del knnDists
     del knnm
     
-    #XXX:hacky way of saving this info
-    if saveSteps:
-        saveTable(pathMatrix,outfile[:-4]+'_distances.csv')
-    
     #then normalize the matrix
-    nconfig = NormMatrixConfig(pathMatrix,GPU_MEM_SIZE)
-    normMatrix = NormMatrix(pathMatrix,nconfig)
+    normMatrix = NormMatrix(pathMatrix,mdists)
     del pathMatrix
+    del mdists
     
     #then get eigenvalues
     #embedding = EigenEmbedding(normMatrix,trgDims)
